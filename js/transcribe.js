@@ -1,0 +1,205 @@
+// ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
+// Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js';
+
+export const LANES = [   // BMY grid order, top to bottom
+  { role: 'crash', name: 'Crash', color: '#d9b326' },
+  { role: 'openHat', name: 'Open Hat', color: '#ec8a2c' },
+  { role: 'closedHat', name: 'Closed Hat', color: '#ec8a2c' },
+  { role: 'snare', name: 'Snare', color: '#3373e6' },
+  { role: 'snareAlt', name: 'Rimshot', color: '#59a6f2' },
+  { role: 'kick', name: 'Kick', color: '#a61a1a' },
+  { role: 'tomHigh', name: 'Hi Tom', color: '#994dbf' },
+  { role: 'tomMid', name: 'Mid Tom', color: '#994dbf' },
+  { role: 'tomFloor', name: 'Floor Tom', color: '#994dbf' },
+  { role: 'oneShotA', name: 'One-Shot A', color: '#33b34d' },
+  { role: 'oneShotB', name: 'One-Shot B', color: '#33b34d' },
+  { role: 'oneShotC', name: 'One-Shot C', color: '#33b34d' }
+];
+export const VEL = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
+export const VEL_MIDI = { gh: 28, sf: 46, n1: 66, n2: 82, a1: 102, a2: 116 };
+
+// ---- spectrogram helpers -----------------------------------------------------------------
+const bandsIn = (lo, hi) => { const r = []; for (let b = 0; b < NBANDS; b++) if (BAND_FREQ[b] >= lo && BAND_FREQ[b] < hi) r.push(b); return r; };
+const B = {
+  kick: bandsIn(30, 150), snare: bandsIn(150, 5000), tom: bandsIn(60, 600),
+  hihat: bandsIn(5000, 16000), cymbal: bandsIn(3000, 16000), toneRange: bandsIn(60, 500)
+};
+const lin = v => Math.pow(10, v) - 1;
+function energy(spec, frames, f, bands) {
+  if (f < 0 || f >= frames) return 0;
+  let s = 0; for (const b of bands) s += lin(spec[f * NBANDS + b]); return s / bands.length;
+}
+function peakEnergy(spec, frames, f, bands) { let m = 0; for (let k = 0; k <= 2; k++) m = Math.max(m, energy(spec, frames, f + k, bands)); return m; }
+function meanEnergy(spec, frames, f0, f1, bands) { let s = 0, n = 0; for (let f = f0; f <= f1; f++) { s += energy(spec, frames, f, bands); n++; } return s / n; }
+
+/** Adds features to each hit: level (dB), decay ratios, tom pitch. specFrame0 = song frame of spec[0]. */
+export function describeHits(hits, spec, frames, specFrame0) {
+  for (const h of hits) {
+    const f = Math.round(h.time * FPS) - specFrame0;
+    const bands = B[h.cls];
+    const pk = peakEnergy(spec, frames, f, bands) + 1e-9;
+    h.levelDb = 20 * Math.log10(pk);
+    if (h.cls === 'hihat') h.decay = meanEnergy(spec, frames, f + 12, f + 20, B.hihat) / pk;
+    if (h.cls === 'cymbal') h.decay = meanEnergy(spec, frames, f + 30, f + 45, B.cymbal) / pk;
+    if (h.cls === 'tom') {
+      let best = 0, bv = -1;
+      for (const b of B.toneRange) { const e = meanEnergy(spec, frames, f + 3, f + 10, [b]); if (e > bv) { bv = e; best = b; } }
+      h.pitch = BAND_FREQ[best];
+    }
+  }
+  return hits;
+}
+
+// ---- lane assignment ---------------------------------------------------------------------
+function tomLanes(hits) {
+  const toms = hits.filter(h => h.cls === 'tom');
+  const ps = [...new Set(toms.map(h => Math.round(h.pitch)))].sort((a, b) => a - b);
+  const map = new Map();
+  if (ps.length === 0) return map;
+  // split at the biggest pitch gaps (ratio > 1.12), max 3 groups
+  const gaps = [];
+  for (let i = 1; i < ps.length; i++) if (ps[i] / ps[i - 1] > 1.12) gaps.push({ i, r: ps[i] / ps[i - 1] });
+  gaps.sort((a, b) => b.r - a.r);
+  const cuts = gaps.slice(0, 2).map(g => g.i).sort((a, b) => a - b);
+  const groups = []; let s = 0;
+  for (const c of [...cuts, ps.length]) { groups.push(ps.slice(s, c)); s = c; }
+  let roles;
+  if (groups.length === 1) {
+    const p = groups[0][Math.floor(groups[0].length / 2)];
+    roles = [p < 110 ? 'tomFloor' : p < 170 ? 'tomMid' : 'tomHigh'];
+  } else roles = groups.length === 2 ? ['tomFloor', 'tomHigh'] : ['tomFloor', 'tomMid', 'tomHigh'];
+  groups.forEach((g, i) => g.forEach(p => map.set(p, roles[i])));
+  return map;
+}
+
+export function assignLanes(hits, bars) {
+  const tm = tomLanes(hits);
+  for (const h of hits) {
+    if (h.cls === 'kick') h.lane = 'kick';
+    else if (h.cls === 'snare') h.lane = 'snare';
+    else if (h.cls === 'tom') h.lane = tm.get(Math.round(h.pitch)) || 'tomMid';
+    else if (h.cls === 'hihat') h.lane = h.decay > 0.2 ? 'openHat' : 'closedHat';
+    else if (h.cls === 'cymbal') h.lane = 'crash';
+  }
+  // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
+  for (const bar of bars) {
+    const cy = hits.filter(h => h.cls === 'cymbal' && h.time >= bar.start - bar.step / 2 && h.time < bar.end - bar.step / 2);
+    if (cy.length >= 3) cy.forEach(h => { h.lane = 'ride'; });
+  }
+  // Velocity: loudness against the median of the same instrument across the marked bars.
+  const groups = {};
+  hits.forEach(h => { (groups[h.lane] = groups[h.lane] || []).push(h.levelDb); });
+  const med = {};
+  for (const [k, v] of Object.entries(groups)) { const s = [...v].sort((a, b) => a - b); med[k] = s[Math.floor(s.length / 2)]; }
+  for (const h of hits) {
+    const d = h.levelDb - med[h.lane];
+    h.vel = d > 4 ? 'a2' : d > 1.5 ? 'a1' : d > -2 ? 'n2' : d > -5 ? 'n1' : d > -10 ? 'sf' : 'gh';
+  }
+  return hits;
+}
+
+// ---- swing ---------------------------------------------------------------------------------
+function gridFor(sw) {   // positions within a beat (in steps) for straight/8th/16th swing
+  if (sw.type === '1-8') return [0, 1, 2 + (2 / 3) * sw.depth, 3];
+  if (sw.type === '1-16') return [0, 1 + sw.depth / 3, 2, 3 + sw.depth / 3];
+  return [0, 1, 2, 3];
+}
+const nearest = (q, grid) => { let bi = 0, bd = Infinity; grid.forEach((g, i) => { const d = Math.abs(q - g); if (d < bd) { bd = d; bi = i; } }); const d4 = Math.abs(q - 4); return d4 < bd ? { i: 4, d: d4 } : { i: bi, d: bd }; };
+
+/** One swing setting for the whole bank (songs don't change swing between bars). */
+export function detectSwing(hits, bars) {
+  const qs = [];
+  for (const bar of bars) for (const h of hits) {
+    const p = (h.time - bar.start) / bar.step;
+    if (p < -0.5 || p >= 15.5) continue;
+    qs.push(((p % 4) + 4) % 4 > 3.5 ? ((p % 4) + 4) % 4 - 4 : ((p % 4) + 4) % 4);
+  }
+  if (qs.length < 4) return { type: 'Off', depth: 0 };
+  const err = sw => qs.reduce((s, q) => s + nearest(q, gridFor(sw)).d, 0) / qs.length;
+  let best = { sw: { type: 'Off', depth: 0 }, e: err({ type: 'Off', depth: 0 }) };
+  for (const type of ['1-8', '1-16']) for (let d = 0.1; d <= 1.0001; d += 0.05) {
+    const sw = { type, depth: d };
+    const used = qs.filter(q => Math.abs(q - gridFor(sw)[type === '1-8' ? 2 : 1]) < 0.15 || Math.abs(q - gridFor(sw)[3]) < 0.15).length;
+    const e = err(sw) + 0.015;                       // prefer straight unless swing clearly fits better
+    if (used >= 2 && e < best.e * 0.8) best = { sw, e };
+  }
+  return { type: best.sw.type, depth: Math.round(best.sw.depth * 100) };
+}
+
+// ---- one bar -> cells ---------------------------------------------------------------------
+const TRIP4 = [0, 4 / 3, 8 / 3], TRIP8 = [0, 2 / 3, 4 / 3];
+
+/** bar: {start, end, step}. Returns {cells, hatUseAlt, notes:[]}. */
+export function barToPattern(hits, bar, swing) {
+  const sw = { type: swing.type, depth: swing.depth / 100 };
+  const grid = gridFor(sw);
+  const inBar = hits.filter(h => h.time >= bar.start - bar.step / 2 && h.time < bar.end - bar.step / 2)
+    .map(h => ({ ...h, p: (h.time - bar.start) / bar.step }));
+  const notes = [];
+  const rideBar = inBar.filter(h => h.lane === 'ride').length >= 3;
+  if (rideBar) {
+    const hats = inBar.filter(h => h.lane === 'closedHat').length;
+    if (hats) notes.push(`${hats} closed-hat hit(s) dropped: this bar plays ride on the hat lane`);
+  }
+  const lanes = {};
+  for (const h of inBar) {
+    let lane = h.lane === 'ride' ? 'closedHat' : h.lane;
+    if (rideBar && h.lane === 'closedHat') continue;
+    (lanes[lane] = lanes[lane] || []).push(h);
+  }
+  const cells = [];
+  const velRank = v => VEL.indexOf(v);
+  for (const [lane, hs] of Object.entries(lanes)) {
+    const byBeat = [[], [], [], []];
+    for (const h of hs) { const beat = Math.min(3, Math.max(0, Math.floor((h.p + 0.25) / 4))); byBeat[beat].push(h); }
+    const taken = new Map();   // step -> cell
+    const put = c => { const old = taken.get(c.step); if (!old || velRank(c.velocity) > velRank(old.velocity)) taken.set(c.step, c); };
+    byBeat.forEach((bh, beat) => {
+      if (!bh.length) return;
+      const qs = bh.map(h => ({ h, q: h.p - beat * 4 }));
+      const unexplained = qs.filter(x => nearest(x.q, grid).d > 0.2);
+      // quarter-span triplet (3 over the beat)
+      if (unexplained.length && qs.length >= 2 && qs.every(x => Math.min(...TRIP4.map(t => Math.abs(x.q - t))) < 0.18)) {
+        const slot = [null, null, null];
+        qs.forEach(x => { const i = TRIP4.reduce((bi, t, k) => (Math.abs(x.q - t) < Math.abs(x.q - TRIP4[bi]) ? k : bi), 0); if (!slot[i] || velRank(x.h.vel) > velRank(slot[i].vel)) slot[i] = x.h; });
+        cells.push(tripCell(lane, beat * 4, 't4', slot));
+        return;
+      }
+      // eighth-span triplets (3 over each half-beat)
+      for (const half of [0, 2]) {
+        const hq = qs.filter(x => x.q >= half - 0.25 && x.q < half + 1.75);
+        const un = hq.filter(x => nearest(x.q, grid).d > 0.2);
+        if (un.length && hq.length >= 2 && hq.every(x => Math.min(...TRIP8.map(t => Math.abs(x.q - half - t))) < 0.15)) {
+          const slot = [null, null, null];
+          hq.forEach(x => { const i = TRIP8.reduce((bi, t, k) => (Math.abs(x.q - half - t) < Math.abs(x.q - half - TRIP8[bi]) ? k : bi), 0); if (!slot[i] || velRank(x.h.vel) > velRank(slot[i].vel)) slot[i] = x.h; });
+          cells.push(tripCell(lane, beat * 4 + half, 't8', slot));
+          hq.forEach(x => { x.used = true; });
+        }
+      }
+      for (const x of qs) {
+        if (x.used) continue;
+        const n = nearest(x.q, grid);
+        const step = beat * 4 + n.i;
+        if (step < 0 || step > 15) continue;
+        if (cells.some(c => c.lane === lane && c.ornament && step >= c.step && step < c.step + (c.ornament === 't4' ? 4 : 2))) continue;
+        put({ lane, step, velocity: x.h.vel, tripletPattern: '111' });
+      }
+    });
+    cells.push(...taken.values());
+  }
+  // drop straight cells covered by a triplet in the same lane
+  const out = cells.filter(c => c.ornament || !cells.some(t => t.ornament && t.lane === c.lane && c.step >= t.step && c.step < t.step + (t.ornament === 't4' ? 4 : 2)));
+  out.sort((a, b) => a.step - b.step || LANES.findIndex(l => l.role === a.lane) - LANES.findIndex(l => l.role === b.lane));
+  return { cells: out, hatUseAlt: rideBar ? 1 : 0, notes };
+}
+
+function tripCell(lane, step, orn, slot) {
+  const present = slot.map(s => (s ? '1' : '0')).join('');
+  if (present === '100') return { lane, step, velocity: slot[0].vel, tripletPattern: '111' };   // just a straight hit
+  const loud = slot.filter(Boolean).reduce((a, b) => (VEL.indexOf(b.vel) > VEL.indexOf(a.vel) ? b : a));
+  const c = { lane, step, velocity: (slot[0] || loud).vel, ornament: orn, tripletPattern: present };
+  if (slot[1]) c.note2Velocity = slot[1].vel;
+  if (slot[2]) c.note3Velocity = slot[2].vel;
+  return c;
+}
