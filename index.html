@@ -85,6 +85,9 @@ const log = m => { logEl.textContent += m + '\n'; logEl.scrollTop = 1e9; };
 const status = m => { statusEl.textContent = m; };
 const setProg = f => { prog.style.width = Math.round(Math.max(0, Math.min(1, f)) * 100) + '%'; };
 const facts = {};
+const crumb = m => { try { localStorage.setItem('bmyLabStage', m + ' @ ' + new Date().toLocaleTimeString()); } catch (e) {} log('· ' + m); };
+const crumbDone = () => { try { localStorage.removeItem('bmyLabStage'); } catch (e) {} };
+let lastCrash = null; try { lastCrash = localStorage.getItem('bmyLabStage'); } catch (e) {}
 const showFacts = () => {
   $('facts').innerHTML = '';
   for (const [k, v] of Object.entries(facts)) {
@@ -111,40 +114,49 @@ async function init() {
       else gpuInfo = 'no adapter';
     } catch (e) { gpuInfo = 'error: ' + e.message; }
   }
+  if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); crumbDone(); }
   log(`WebGPU: ${gpuInfo}`);
   log(`Cross-origin isolated: ${self.crossOriginIsolated} · cores: ${navigator.hardwareConcurrency}`);
   log(`User agent: ${navigator.userAgent}`);
-  status(gpuInfo === 'none' ? 'No WebGPU here: it will run on the CPU and be slow.' : 'Ready. Choose a song.');
+  status(lastCrash ? 'The last run stopped during: ' + lastCrash.split(' @ ')[0] + '. See the log.'
+    : gpuInfo === 'none' ? 'No WebGPU here: it will run on the CPU and be slow.' : 'Ready. Choose a song.');
 }
 
 async function getModel() {
   let cache = null;
   try { cache = await caches.open(CACHE); } catch (e) { log('Cache storage unavailable: ' + e.message); }
   if (cache) {
-    const hit = await cache.match(MODEL_URL);
-    if (hit) { status('Loading model from storage…'); log('Model: from cache'); return await hit.arrayBuffer(); }
+    let hit = await cache.match(MODEL_URL);
+    if (!hit) {
+      crumb('downloading model');
+      status('Downloading model (181 MB, once)…');
+      const res = await fetch(MODEL_URL);
+      if (!res.ok) throw new Error('Model download failed: HTTP ' + res.status);
+      const total = +res.headers.get('Content-Length') || 181e6; let got = 0;
+      const counter = new TransformStream({ transform(chunk, ctl) {
+        got += chunk.length; setProg(got / total);
+        status(`Downloading model… ${(got / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`);
+        ctl.enqueue(chunk);
+      } });
+      // Streams to disk: the model is never held in memory during download.
+      await cache.put(MODEL_URL, new Response(res.body.pipeThrough(counter), { headers: { 'Content-Type': 'application/octet-stream' } }));
+      log(`Model downloaded and stored (${(got / 1e6).toFixed(0)} MB)`);
+      hit = await cache.match(MODEL_URL);
+    } else log('Model: from storage');
+    crumb('reading model from storage');
+    status('Reading model from storage…');
+    return new Uint8Array(await hit.arrayBuffer());
   }
-  status('Downloading model (181 MB, once)…');
+  crumb('downloading model (no cache)');
   const res = await fetch(MODEL_URL);
   if (!res.ok) throw new Error('Model download failed: HTTP ' + res.status);
-  const total = +res.headers.get('Content-Length') || 181e6;
-  const reader = res.body.getReader(); const parts = []; let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read(); if (done) break;
-    parts.push(value); got += value.length; setProg(got / total);
-    status(`Downloading model… ${(got / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`);
-  }
-  const buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
-  if (cache) {
-    try { await cache.put(MODEL_URL, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } })); log('Model cached for next time'); }
-    catch (e) { log('Could not cache model: ' + e.message); }
-  }
-  return buf.buffer;
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 $('file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  status('Decoding audio…'); $('run').disabled = true;
+  status('Decoding audio…'); $('run').disabled = true; audioBuf = null;
+  crumb('decoding song');
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
     audioBuf = await ctx.decodeAudioData(await f.arrayBuffer());
@@ -152,6 +164,7 @@ $('file').addEventListener('change', async e => {
     log(`Loaded "${f.name}": ${audioBuf.duration.toFixed(1)} s, ${audioBuf.numberOfChannels} ch @ ${audioBuf.sampleRate} Hz`);
     $('start').max = Math.max(0, Math.floor(audioBuf.duration - 4));
     if (+$('start').value > audioBuf.duration - 4) $('start').value = 0;
+    crumbDone();
     status('Ready. Tap Separate drums.'); $('run').disabled = false;
   } catch (err) { status('Could not decode that file.'); log(String(err)); }
 });
@@ -168,22 +181,25 @@ $('run').addEventListener('click', async () => {
 
   try {
     const t0 = performance.now();
-    const model = await getModel();
+    let model = await getModel();
     const t1 = performance.now();
     status('Starting the model…');
     const proc = new DemucsProcessor({
       ort,
-      onProgress: p => { setProg(p.progress); status(`Separating… piece ${p.currentSegment} of ${p.totalSegments}`); },
+      onProgress: p => { setProg(p.progress); status(`Separating… piece ${p.currentSegment} of ${p.totalSegments}`); crumb(`separating, piece ${p.currentSegment} of ${p.totalSegments} done`); },
       onLog: (ph, m) => log(`[${ph}] ${m}`)
     });
     backend = null;
+    const lean = { graphOptimizationLevel: 'basic', enableCpuMemArena: false, enableMemPattern: false };
     if (gpuInfo !== 'none' && !gpuInfo.startsWith('no') && !gpuInfo.startsWith('error')) {
-      try { proc.sessionOptions = { executionProviders: ['webgpu'] }; await proc.loadModel(model); backend = 'WebGPU'; }
+      try { crumb('starting model on WebGPU'); proc.sessionOptions = { ...lean, executionProviders: ['webgpu'] }; await proc.loadModel(model.buffer); backend = 'WebGPU'; }
       catch (e) { log('WebGPU session failed, falling back to CPU: ' + e.message); }
     }
-    if (!backend) { proc.sessionOptions = { executionProviders: ['wasm'] }; await proc.loadModel(model); backend = 'CPU (WebAssembly)'; }
+    if (!backend) { crumb('starting model on CPU'); proc.sessionOptions = { ...lean, executionProviders: ['wasm'] }; await proc.loadModel(model.buffer); backend = 'CPU (WebAssembly)'; }
+    model = null;   // let the model bytes go once the session has them
     const t2 = performance.now();
     status(`Separating on ${backend}…`);
+    crumb('separating on ' + backend);
     const out = await proc.separate(L, R);
     const t3 = performance.now();
 
@@ -205,10 +221,11 @@ $('run').addEventListener('click', async () => {
     const wav = toWav(out.drums.left, out.drums.right, SR);
     const url = URL.createObjectURL(wav);
     $('player').src = url; $('dl').href = url;
-    $('result').hidden = false; setProg(1);
+    $('result').hidden = false; setProg(1); crumbDone();
     status('Done. Listen to the drum stem below.');
     $('result').scrollIntoView({ behavior: 'smooth' });
   } catch (err) {
+    crumbDone();
     status('Failed: ' + (err && err.message || err));
     log('ERROR: ' + (err && (err.stack || err.message) || err));
   } finally { $('run').disabled = false; }
