@@ -16,5 +16,5 @@ Test hook: `?nodemucs` treats the song as an already-separated drum track.
 
 ## Credits
 - Demucs v4 (Meta, MIT); split ONNX export [monteslu/htdemucs-web-onnx](https://huggingface.co/monteslu/htdemucs-web-onnx) (MIT); pre/post-processing [demucs-web](https://github.com/timcsy/demucs-web) (MIT).
-- ADTOF (Zehren, Alunno, Bientinesi); PyTorch port [xavriley/ADTOF-pytorch](https://github.com/xavriley/ADTOF-pytorch).
+- ADTOF (Zehren, Alunno, Bientinesi), [MZehren/ADTOF](https://github.com/MZehren/ADTOF), licensed CC BY-NC-SA 4.0; PyTorch port [xavriley/ADTOF-pytorch](https://github.com/xavriley/ADTOF-pytorch). `models/adtof.onnx` is a format conversion of those weights and carries the same non-commercial licence: fine for this personal tool, not for shipping inside a paid app.
 - ONNX Runtime Web (MIT).
