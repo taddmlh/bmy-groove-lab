@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>BMY Groove Lab · Speed test</title>
+<style>
+/* VOICE: a bench test rig — plain, exact, readable at arm's length on an iPad.
+   IDEA: a rehearsal-room test sheet: one job, numbers that matter.
+   PICTURE: the live result readout (backend, times, realtime factor).
+   COLOUR/TYPE: BMY's black stage with its orange hat accent; system sans.
+   LAYOUT: single column, big controls, result card under them. */
+:root{color-scheme:dark;--bg:#000;--panel:#121214;--line:#2a2a2e;--ink:#f2f2f4;--dim:#9a9aa2;--acc:#ec8a2c;--ok:#3fbf6a;--bad:#e5484d}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+main{max-width:760px;margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 20px 48px}
+h1{font-size:34px;line-height:1.1;margin:0 0 6px;font-weight:600}
+p.lead{color:var(--dim);margin:0 0 24px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:18px}
+label{display:block;color:var(--dim);font-size:15px;margin-bottom:6px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:14px}
+input[type=number]{width:100%;font-size:17px;padding:12px;border-radius:10px;border:1px solid var(--line);background:#000;color:var(--ink)}
+input[type=file]{font-size:16px;color:var(--ink);width:100%}
+button,.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 22px;border-radius:12px;border:0;font-size:17px;font-weight:600;background:var(--acc);color:#000;cursor:pointer;text-decoration:none}
+button:disabled{opacity:.4}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,.btn:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:18px}
+.bar{height:10px;background:#222;border-radius:6px;overflow:hidden;margin-top:12px}
+.bar>i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+#status{margin-top:10px;color:var(--dim);font-size:15px;min-height:1.5em}
+dl{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;margin:0}
+dt{color:var(--dim)}dd{margin:0;font-variant-numeric:tabular-nums;text-align:right}
+.big{font-size:44px;font-weight:600;line-height:1;margin:4px 0 14px;font-variant-numeric:tabular-nums}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+pre{white-space:pre-wrap;font-size:13px;color:var(--dim);margin:12px 0 0;max-height:220px;overflow:auto}
+audio{width:100%;margin-top:14px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Groove Lab speed test</h1>
+  <p class="lead">Runs Demucs on this iPad to pull the drums out of a short clip. Nothing is uploaded. The first run downloads the 181&nbsp;MB model once; after that it loads from storage.</p>
+
+  <section class="panel">
+    <label for="file">Song (from Files)</label>
+    <input id="file" type="file" accept="audio/*,.mp3,.m4a,.wav,.aif,.aiff,.flac">
+    <div class="row">
+      <div><label for="start">Start at (seconds)</label><input id="start" type="number" min="0" step="1" value="30"></div>
+      <div><label for="len">Clip length (seconds)</label><input id="len" type="number" min="4" max="60" step="1" value="20"></div>
+    </div>
+    <div class="actions">
+      <button id="run" disabled>Separate drums</button>
+      <button id="forget" class="ghost">Delete cached model</button>
+    </div>
+    <div class="bar"><i id="prog"></i></div>
+    <div id="status">Checking this browser…</div>
+  </section>
+
+  <section class="panel" id="result" hidden>
+    <label>Speed (clip seconds per second of work)</label>
+    <div class="big" id="rtf">–</div>
+    <dl id="facts"></dl>
+    <audio id="player" controls></audio>
+    <div class="actions"><a id="dl" class="btn ghost" download="drums.wav">Save drum stem (WAV)</a></div>
+  </section>
+
+  <section class="panel">
+    <label>Log</label>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script type="module">
+{
+const ORT_VER = '1.31.1';
+const MODEL_URL = 'https://huggingface.co/timcsy/demucs-web-onnx/resolve/main/htdemucs_embedded.onnx';
+const CACHE = 'bmy-groove-lab-models-v1';
+const SR = 44100;
+
+const $ = id => document.getElementById(id);
+const logEl = $('log'), statusEl = $('status'), prog = $('prog');
+const log = m => { logEl.textContent += m + '\n'; logEl.scrollTop = 1e9; };
+const status = m => { statusEl.textContent = m; };
+const setProg = f => { prog.style.width = Math.round(Math.max(0, Math.min(1, f)) * 100) + '%'; };
+const facts = {};
+const showFacts = () => {
+  $('facts').innerHTML = '';
+  for (const [k, v] of Object.entries(facts)) {
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v;
+    $('facts').append(dt, dd);
+  }
+};
+
+let ort, DemucsProcessor, audioBuf = null, backend = null, gpuInfo = 'none';
+
+async function init() {
+  try {
+    ort = await import(`https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/ort.webgpu.min.mjs`);
+    ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 4) : 1;
+    ({ DemucsProcessor } = await import('https://cdn.jsdelivr.net/npm/demucs-web@1.0.2/src/index.js'));
+  } catch (e) { status('Could not load the libraries: ' + e.message); log(String(e)); return; }
+
+  if ('gpu' in navigator) {
+    try {
+      const a = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (a) { const i = a.info || {}; gpuInfo = [i.vendor, i.architecture, i.description].filter(Boolean).join(' ') || 'available'; }
+      else gpuInfo = 'no adapter';
+    } catch (e) { gpuInfo = 'error: ' + e.message; }
+  }
+  log(`WebGPU: ${gpuInfo}`);
+  log(`Cross-origin isolated: ${self.crossOriginIsolated} · cores: ${navigator.hardwareConcurrency}`);
+  log(`User agent: ${navigator.userAgent}`);
+  status(gpuInfo === 'none' ? 'No WebGPU here: it will run on the CPU and be slow.' : 'Ready. Choose a song.');
+}
+
+async function getModel() {
+  let cache = null;
+  try { cache = await caches.open(CACHE); } catch (e) { log('Cache storage unavailable: ' + e.message); }
+  if (cache) {
+    const hit = await cache.match(MODEL_URL);
+    if (hit) { status('Loading model from storage…'); log('Model: from cache'); return await hit.arrayBuffer(); }
+  }
+  status('Downloading model (181 MB, once)…');
+  const res = await fetch(MODEL_URL);
+  if (!res.ok) throw new Error('Model download failed: HTTP ' + res.status);
+  const total = +res.headers.get('Content-Length') || 181e6;
+  const reader = res.body.getReader(); const parts = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    parts.push(value); got += value.length; setProg(got / total);
+    status(`Downloading model… ${(got / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB`);
+  }
+  const buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
+  if (cache) {
+    try { await cache.put(MODEL_URL, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } })); log('Model cached for next time'); }
+    catch (e) { log('Could not cache model: ' + e.message); }
+  }
+  return buf.buffer;
+}
+
+$('file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  status('Decoding audio…'); $('run').disabled = true;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+    audioBuf = await ctx.decodeAudioData(await f.arrayBuffer());
+    ctx.close();
+    log(`Loaded "${f.name}": ${audioBuf.duration.toFixed(1)} s, ${audioBuf.numberOfChannels} ch @ ${audioBuf.sampleRate} Hz`);
+    $('start').max = Math.max(0, Math.floor(audioBuf.duration - 4));
+    if (+$('start').value > audioBuf.duration - 4) $('start').value = 0;
+    status('Ready. Tap Separate drums.'); $('run').disabled = false;
+  } catch (err) { status('Could not decode that file.'); log(String(err)); }
+});
+
+$('run').addEventListener('click', async () => {
+  if (!audioBuf) return;
+  $('run').disabled = true; setProg(0);
+  const start = Math.max(0, +$('start').value || 0);
+  const len = Math.min(60, Math.max(4, +$('len').value || 20));
+  const s0 = Math.floor(start * SR), s1 = Math.min(audioBuf.length, s0 + Math.floor(len * SR));
+  const L = audioBuf.getChannelData(0).slice(s0, s1);
+  const R = (audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : audioBuf.getChannelData(0)).slice(s0, s1);
+  const clipSec = L.length / SR;
+
+  try {
+    const t0 = performance.now();
+    const model = await getModel();
+    const t1 = performance.now();
+    status('Starting the model…');
+    const proc = new DemucsProcessor({
+      ort,
+      onProgress: p => { setProg(p.progress); status(`Separating… piece ${p.currentSegment} of ${p.totalSegments}`); },
+      onLog: (ph, m) => log(`[${ph}] ${m}`)
+    });
+    backend = null;
+    if (gpuInfo !== 'none' && !gpuInfo.startsWith('no') && !gpuInfo.startsWith('error')) {
+      try { proc.sessionOptions = { executionProviders: ['webgpu'] }; await proc.loadModel(model); backend = 'WebGPU'; }
+      catch (e) { log('WebGPU session failed, falling back to CPU: ' + e.message); }
+    }
+    if (!backend) { proc.sessionOptions = { executionProviders: ['wasm'] }; await proc.loadModel(model); backend = 'CPU (WebAssembly)'; }
+    const t2 = performance.now();
+    status(`Separating on ${backend}…`);
+    const out = await proc.separate(L, R);
+    const t3 = performance.now();
+
+    const sepSec = (t3 - t2) / 1000;
+    Object.assign(facts, {
+      'Ran on': backend,
+      'GPU': gpuInfo,
+      'Clip': `${clipSec.toFixed(1)} s from ${start}s`,
+      'Model fetch / load': `${((t1 - t0) / 1000).toFixed(1)} s / ${((t2 - t1) / 1000).toFixed(1)} s`,
+      'Separation': `${sepSec.toFixed(1)} s`,
+      'Per 7.8 s piece': `${(sepSec / Math.ceil(clipSec / 5.85)).toFixed(1)} s`
+    });
+    const rtf = clipSec / sepSec;
+    $('rtf').textContent = rtf.toFixed(2) + '×';
+    $('rtf').className = 'big ' + (rtf >= 0.5 ? 'ok' : 'bad');
+    showFacts();
+    log(`Done: ${backend}, separation ${sepSec.toFixed(1)} s for ${clipSec.toFixed(1)} s (${rtf.toFixed(2)}× realtime)`);
+
+    const wav = toWav(out.drums.left, out.drums.right, SR);
+    const url = URL.createObjectURL(wav);
+    $('player').src = url; $('dl').href = url;
+    $('result').hidden = false; setProg(1);
+    status('Done. Listen to the drum stem below.');
+    $('result').scrollIntoView({ behavior: 'smooth' });
+  } catch (err) {
+    status('Failed: ' + (err && err.message || err));
+    log('ERROR: ' + (err && (err.stack || err.message) || err));
+  } finally { $('run').disabled = false; }
+});
+
+$('forget').addEventListener('click', async () => {
+  try { await caches.delete(CACHE); status('Cached model deleted.'); log('Cache cleared'); }
+  catch (e) { status('Could not clear: ' + e.message); }
+});
+
+function toWav(l, r, sr) {
+  const n = l.length, buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 4, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    v.setInt16(o, Math.max(-1, Math.min(1, l[i])) * 32767, true); o += 2;
+    v.setInt16(o, Math.max(-1, Math.min(1, r[i])) * 32767, true); o += 2;
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+init();
+}
+</script>
+</body>
+</html>
