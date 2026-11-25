@@ -69,6 +69,7 @@ audio{width:100%;margin-top:14px}
   <section class="panel">
     <label>Log</label>
     <pre id="log"></pre>
+    <div class="actions"><button id="copylog" class="ghost">Copy log</button><button id="clearlog" class="ghost">Clear log</button></div>
   </section>
 </main>
 
@@ -81,8 +82,20 @@ const SR = 44100;
 
 const $ = id => document.getElementById(id);
 const logEl = $('log'), statusEl = $('status'), prog = $('prog');
-const log = m => { logEl.textContent += m + '\n'; logEl.scrollTop = 1e9; };
-const status = m => { statusEl.textContent = m; };
+const stamp = () => new Date().toLocaleTimeString();
+let prevLog = ''; try { prevLog = localStorage.getItem('bmyLabLog') || ''; } catch (e) {}
+let curLog = '';
+const log = m => {
+  curLog += `${stamp()}  ${m}\n`;
+  try { localStorage.setItem('bmyLabLog', curLog.slice(-20000)); } catch (e) {}
+  logEl.textContent = (prevLog ? '— PREVIOUS PAGE LOAD —\n' + prevLog + '\n— THIS PAGE LOAD —\n' : '') + curLog;
+  logEl.scrollTop = 1e9;
+};
+let lastStatus = '';
+const status = m => { statusEl.textContent = m; if (m !== lastStatus && !/^(Downloading model…|Separating…)/.test(m)) log('status: ' + m); lastStatus = m; };
+window.addEventListener('error', e => log('PAGE ERROR: ' + (e.message || e.error) + (e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '')));
+window.addEventListener('unhandledrejection', e => log('UNHANDLED: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+window.addEventListener('pagehide', () => log('page hidden / unloading'));
 const setProg = f => { prog.style.width = Math.round(Math.max(0, Math.min(1, f)) * 100) + '%'; };
 const facts = {};
 const crumb = m => { try { localStorage.setItem('bmyLabStage', m + ' @ ' + new Date().toLocaleTimeString()); } catch (e) {} log('· ' + m); };
@@ -251,6 +264,13 @@ function toWav(l, r, sr) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
+$('copylog').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(logEl.textContent); $('copylog').textContent = 'Copied'; }
+  catch (e) { const r = document.createRange(); r.selectNodeContents(logEl); getSelection().removeAllRanges(); getSelection().addRange(r); $('copylog').textContent = 'Selected: tap Copy'; }
+  setTimeout(() => { $('copylog').textContent = 'Copy log'; }, 2500);
+});
+$('clearlog').addEventListener('click', () => { prevLog = ''; curLog = ''; try { localStorage.removeItem('bmyLabLog'); } catch (e) {} logEl.textContent = ''; });
+log('page loaded (build 3)');
 init();
 }
 </script>
