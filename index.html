@@ -50,6 +50,13 @@ audio{width:100%;margin-top:14px}
       <div><label for="start">Start at (seconds)</label><input id="start" type="number" min="0" step="1" value="30"></div>
       <div><label for="len">Clip length (seconds)</label><input id="len" type="number" min="4" max="60" step="1" value="20"></div>
     </div>
+    <div class="row">
+      <div><label for="engine">Model</label>
+        <select id="engine" style="width:100%;font-size:17px;padding:12px;border-radius:10px;border:1px solid var(--line);background:#000;color:var(--ink)">
+          <option value="split">Split, half precision (126 MB, lighter)</option>
+          <option value="single">Single, full precision (181 MB)</option>
+        </select></div>
+    </div>
     <div class="actions">
       <button id="run" disabled>Separate drums</button>
       <button id="forget" class="ghost">Delete cached model</button>
@@ -77,7 +84,12 @@ audio{width:100%;margin-top:14px}
 {
 const ORT_VER = '1.31.1';
 const MODEL_URL = 'https://huggingface.co/timcsy/demucs-web-onnx/resolve/main/htdemucs_embedded.onnx';
+const SPLIT_BASE = 'https://huggingface.co/monteslu/htdemucs-web-onnx/resolve/main/';
 const CACHE = 'bmy-groove-lab-models-v1';
+const CPU_NODES = ['/ReduceMean','/Sub','/Pow','/ReduceMean_1','/Clip','/Sqrt','/Add','/Div',
+  '/ReduceMean_2','/Sub_1','/Pow_1','/ReduceMean_3','/Clip_1','/Sqrt_1','/Add_1','/Div_1'];
+const TS = 343980, BINS = 2048, FRAMES = 336, STRIDE = Math.floor(TS * 0.75);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SR = 44100;
 
 const $ = id => document.getElementById(id);
@@ -110,7 +122,7 @@ const showFacts = () => {
   }
 };
 
-let ort, DemucsProcessor, audioBuf = null, backend = null, gpuInfo = 'none';
+let ort, DemucsProcessor, dw, audioBuf = null, backend = null, gpuInfo = 'none';
 
 async function init() {
   try {
@@ -118,6 +130,7 @@ async function init() {
     ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
     ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 4) : 1;
     ({ DemucsProcessor } = await import('https://cdn.jsdelivr.net/npm/demucs-web@1.0.2/src/index.js'));
+    dw = await import('https://cdn.jsdelivr.net/npm/demucs-web@1.0.2/src/processor.js');
   } catch (e) { status('Could not load the libraries: ' + e.message); log(String(e)); return; }
 
   if ('gpu' in navigator) {
@@ -133,6 +146,110 @@ async function init() {
   log(`User agent: ${navigator.userAgent}`);
   status(lastCrash ? 'The last run stopped during: ' + lastCrash.split(' @ ')[0] + '. See the log.'
     : gpuInfo === 'none' ? 'No WebGPU here: it will run on the CPU and be slow.' : 'Ready. Choose a song.');
+}
+
+async function cachedBytes(url, label) {
+  let cache = null;
+  try { cache = await caches.open(CACHE); } catch (e) {}
+  let hit = cache && await cache.match(url);
+  if (!hit) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${label}: HTTP ${res.status}`);
+    if (!cache) return new Uint8Array(await res.arrayBuffer());
+    await cache.put(url, res);
+    hit = await cache.match(url);
+  }
+  return new Uint8Array(await hit.arrayBuffer());
+}
+
+let split = null;   // { pieces:[{session, inputs, outputs, lastUse}] }
+async function loadSplit() {
+  if (split) return split;
+  crumb('loading split model manifest');
+  const man = JSON.parse(new TextDecoder().decode(await cachedBytes(SPLIT_BASE + 'htdemucs_split_manifest.json', 'manifest')));
+  const n = man.pieces.length, pieces = [];
+  // When can each intermediate tensor be dropped?
+  const lastUse = {};
+  man.pieces.forEach((p, i) => p.inputs.forEach(k => { lastUse[k] = i; }));
+  for (let i = 0; i < n; i++) {
+    const p = man.pieces[i];
+    crumb(`loading piece ${i + 1} of ${n}`);
+    status(`Loading model piece ${i + 1} of ${n}…`); setProg(i / n);
+    const bytes = await cachedBytes(SPLIT_BASE + p.file, p.file);
+    const final = p.outputs.includes(man.outputs.freq) || p.outputs.includes(man.outputs.time);
+    const opts = {
+      executionProviders: i === 0 ? [{ name: 'webgpu', forceCpuNodeNames: CPU_NODES }] : ['webgpu'],
+      graphOptimizationLevel: 'all',
+      preferredOutputLocation: final ? 'cpu' : 'gpu-buffer'
+    };
+    const session = await ort.InferenceSession.create(bytes, opts);
+    pieces.push({ session, inputs: p.inputs, outputs: p.outputs, file: p.file });
+    await sleep(5);
+  }
+  split = { pieces, lastUse, freq: man.outputs.freq, time: man.outputs.time };
+  log(`Split model ready: ${n} pieces`);
+  return split;
+}
+
+async function runSplitSegment(m, input, segNo, timing) {
+  const env = {
+    mix: new ort.Tensor('float32', input.waveform, [1, 2, TS]),
+    mag: new ort.Tensor('float32', input.magSpec, [1, 4, BINS, FRAMES])
+  };
+  const dev = ort.env.webgpu && ort.env.webgpu.device;
+  for (let i = 0; i < m.pieces.length; i++) {
+    const p = m.pieces[i];
+    if (segNo === 1) crumb(`separating, first piece of audio, model part ${i + 1} of ${m.pieces.length}`);
+    const feeds = {}; for (const k of p.inputs) feeds[k] = env[k];
+    const t = performance.now();
+    const out = await p.session.run(feeds);
+    Object.assign(env, out);
+    // free GPU tensors nothing later needs
+    for (const k of p.inputs) if (m.lastUse[k] === i && k !== 'mix' && k !== 'mag') { try { env[k].dispose(); } catch (e) {} delete env[k]; }
+    if (dev) { try { await dev.queue.onSubmittedWorkDone(); } catch (e) {} }
+    if (timing) timing[i] = (timing[i] || 0) + performance.now() - t;
+    await sleep(2);
+  }
+  const x = env[m.freq], xt = env[m.time];
+  const res = { freq: x.data, time: xt.data, timeDims: xt.dims };
+  for (const k of Object.keys(env)) { if (k !== 'mix' && k !== 'mag' && k !== m.freq && k !== m.time) { try { env[k].dispose(); } catch (e) {} } }
+  return res;
+}
+
+async function separateSplit(L, R, onProg) {
+  const m = await loadSplit();
+  const total = L.length, TRACKS = 4;
+  const nSeg = Math.ceil(Math.max(0, total - TS) / STRIDE) + 1;
+  const outs = Array.from({ length: TRACKS }, () => ({ left: new Float32Array(total), right: new Float32Array(total) }));
+  const w = new Float32Array(total);
+  const timing = [];
+  let seg = 0;
+  for (let start = 0; start < total; start += STRIDE) {
+    const segLen = Math.min(TS, total - start);
+    const sl = new Float32Array(TS), sr = new Float32Array(TS);
+    sl.set(L.subarray(start, start + segLen)); sr.set(R.subarray(start, start + segLen));
+    const input = dw.prepareModelInput(sl, sr);
+    seg++;
+    const r = await runSplitSegment(m, input, seg, timing);
+    if (seg === 1) log('First piece of audio, ms per model part: ' + timing.map(x => Math.round(x)).join(' '));
+    const specs = dw.standaloneMask(r.freq);
+    const ch = r.timeDims[2], ns = r.timeDims[3];
+    const win = new Float32Array(segLen);
+    for (let i = 0; i < segLen; i++) win[i] = Math.min(i / (STRIDE * 0.5), (segLen - i) / (STRIDE * 0.5), 1);
+    for (let t = 0; t < TRACKS; t++) {
+      const f = dw.standaloneIspec(specs[t], TS);
+      const base = t * ch * ns;
+      for (let i = 0; i < segLen; i++) {
+        outs[t].left[start + i] += (r.time[base + i] + (f.left[i] || 0)) * win[i];
+        outs[t].right[start + i] += (r.time[base + ns + i] + (f.right[i] || 0)) * win[i];
+      }
+    }
+    for (let i = 0; i < segLen; i++) w[start + i] += win[i];
+    onProg({ progress: seg / nSeg, currentSegment: seg, totalSegments: nSeg });
+    if (start + TS >= total) break;
+  }
+  for (const o of outs) for (let i = 0; i < total; i++) if (w[i] > 0) { o.left[i] /= w[i]; o.right[i] /= w[i]; }
+  return { drums: outs[0], bass: outs[1], other: outs[2], vocals: outs[3] };
 }
 
 async function getModel() {
@@ -193,8 +310,9 @@ $('run').addEventListener('click', async () => {
   const clipSec = L.length / SR;
 
   try {
+    const engine = $('engine').value;
     const t0 = performance.now();
-    let model = await getModel();
+    let model = engine === 'single' ? await getModel() : null;
     const t1 = performance.now();
     status('Starting the model…');
     const proc = new DemucsProcessor({
@@ -204,16 +322,25 @@ $('run').addEventListener('click', async () => {
     });
     backend = null;
     const lean = { graphOptimizationLevel: 'basic', enableCpuMemArena: false, enableMemPattern: false };
+    const onP = p => { setProg(p.progress); status(`Separating… piece ${p.currentSegment} of ${p.totalSegments}`); crumb(`separating, piece ${p.currentSegment} of ${p.totalSegments} done`); };
+    let out, t2;
+    if (engine === 'split') {
+      await loadSplit(); backend = 'WebGPU (split, half precision)';
+      t2 = performance.now();
+      status('Separating on WebGPU…'); crumb('separating (split model)');
+      out = await separateSplit(L, R, onP);
+    } else {
     if (gpuInfo !== 'none' && !gpuInfo.startsWith('no') && !gpuInfo.startsWith('error')) {
       try { crumb('starting model on WebGPU'); proc.sessionOptions = { ...lean, executionProviders: ['webgpu'] }; await proc.loadModel(model.buffer); backend = 'WebGPU'; }
       catch (e) { log('WebGPU session failed, falling back to CPU: ' + e.message); }
     }
     if (!backend) { crumb('starting model on CPU'); proc.sessionOptions = { ...lean, executionProviders: ['wasm'] }; await proc.loadModel(model.buffer); backend = 'CPU (WebAssembly)'; }
     model = null;   // let the model bytes go once the session has them
-    const t2 = performance.now();
+    t2 = performance.now();
     status(`Separating on ${backend}…`);
     crumb('separating on ' + backend);
-    const out = await proc.separate(L, R);
+    out = await proc.separate(L, R);
+    }
     const t3 = performance.now();
 
     const sepSec = (t3 - t2) / 1000;
@@ -270,7 +397,7 @@ $('copylog').addEventListener('click', async () => {
   setTimeout(() => { $('copylog').textContent = 'Copy log'; }, 2500);
 });
 $('clearlog').addEventListener('click', () => { prevLog = ''; curLog = ''; try { localStorage.removeItem('bmyLabLog'); } catch (e) {} logEl.textContent = ''; });
-log('page loaded (build 3)');
+log('page loaded (build 4)');
 init();
 }
 </script>
