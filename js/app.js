@@ -995,6 +995,7 @@ $('saveStem').onclick = async () => {
   if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: fname }); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const url = URL.createObjectURL(file), el = document.createElement('a'); el.href = url; el.download = fname; document.body.appendChild(el); el.click(); el.remove();
 };
+$('closeLog').onclick = () => { $('logBox').open = false; };
 $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($('log').textContent); $('copyLog').textContent = 'Copied'; } catch (e) { $('copyLog').textContent = 'Copy failed'; } };
 
 // ---------------------------------------------------------------- start
