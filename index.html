@@ -94,6 +94,9 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
 @media (max-width:820px){.title{max-width:44vw}}
 @media (prefers-reduced-motion:reduce){.prog>i{transition:none}}
 .tools{display:contents}
+#pListen.live{background:var(--acc);border-color:var(--acc);color:#000;font-weight:600;animation:listen 1.4s ease-in-out infinite}
+@keyframes listen{50%{box-shadow:0 0 0 5px rgba(255,173,20,.25)}}
+@media (prefers-reduced-motion:reduce){#pListen.live{animation:none}}
 .grp{display:inline-flex;align-items:center;gap:5px;flex:none}
 .phonetabs{display:none}
 /* ---- phone layout (iPhone): one screen per job, chosen by the tabs along the bottom (Song / Pattern / Perform). */
@@ -197,7 +200,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <h3>Perform: clap, tap or beatbox over a click</h3>
     <div class="bar">
       <span class="grp"><span class="label">Tempo</span><input id="pBpm" type="number" min="40" max="240" step="0.1" value="100"></span>
-      <span class="grp"><button id="pTap">Tap</button><button id="pListen" title="Clap quarter notes for a few seconds">Listen</button></span>
+      <span class="grp"><button id="pTap">Tap</button><button id="pListen" aria-pressed="false" title="Keep listening: the click finds your tempo and follows you">Listen</button></span>
       <span class="grp"><span class="label">Bars</span><span class="seg" id="pBars"><button data-n="1">1</button><button data-n="2" class="on">2</button><button data-n="4">4</button></span></span>
       <span class="grp"><button id="pClickBtn" title="Start or stop the click">▶︎ Click</button><input id="pClick" type="range" min="0" max="100" value="70" style="width:90px;accent-color:var(--acc)" aria-label="Click volume"></span>
     </div>

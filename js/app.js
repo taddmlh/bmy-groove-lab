@@ -1017,7 +1017,7 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 // ---------------------------------------------------------------- Perform: clap / tap / beatbox over a click
 const P = {
   bpm: 100, bars: 2, mode: 'lane', lane: 'snare', overdub: true, clickVol: 0.7,
-  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null, clock: null
+  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null, clock: null, follow: null
 };
 try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { latency: st.latency ?? null, bpm: st.bpm || 100, bars: st.bars || 2, clickVol: st.clickVol ?? 0.7 });
   if (st.sounds) P.sounds = st.sounds.map(x => ({ ...x, centroid: x.centroid && Float32Array.from(x.centroid) })); } catch (e) {}
@@ -1045,7 +1045,7 @@ function showPerf() {
 }
 $('perfBtn').onclick = () => {
   const el = $('perf');
-  if (!el.classList.contains('hidden')) { if (!P.rec) { stopClock(); el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
+  if (!el.classList.contains('hidden')) { if (!P.rec) { stopFollow(); stopClock(); el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
   closeRecent(); stopPlay(); el.classList.remove('hidden'); $('perfBtn').setAttribute('aria-expanded', 'true'); showPerf();
 };
 $('pBpm').onchange = () => { P.bpm = Math.max(40, Math.min(240, +$('pBpm').value || 100)); savePerfPrefs(); if (P.clock && !P.rec) { stopClock(); startClock(); } };
@@ -1091,14 +1091,73 @@ async function listenFor(secs, label) {
   while ((performance.now() - t0) / 1000 < secs) { pStatus(`${label} ${Math.ceil(secs - (performance.now() - t0) / 1000)}…`); await sleep(200); }
   return micClose(r);
 }
+// Listen = follow: keeps listening, finds the tempo and where the beats fall, starts the click on your beat and keeps it in step.
+// Holds still while a take records (the take needs a fixed grid).
+const F_WIN = 8, F_EVERY = 400;
+function followTempo(ts, guess) {
+  // circular fit on the 8th-note grid; ±8 % around the guess (or the plain median-interval tempo when there is none)
+  let best = null;
+  const lo = guess ? guess * 0.92 : 60, hi = guess ? guess * 1.08 : 180;
+  for (let bpm = lo; bpm <= hi; bpm += 0.1) {
+    const p = 30 / bpm; let re = 0, im = 0;
+    for (const t of ts) { const a = 2 * Math.PI * t / p; re += Math.cos(a); im += Math.sin(a); }
+    const R = Math.hypot(re, im) / ts.length;
+    if (!best || R > best.R) best = { bpm, R };
+  }
+  return best;
+}
+function startFollow() {
+  return micOpen().then(r => {
+    const F = { r, dropped: 0, timer: null, locked: false, lastN: 0 };
+    F.timer = setInterval(() => followTick(F), F_EVERY);
+    P.follow = F; showListen(); pStatus('Listening… clap, tap or play; the click will join you.');
+  });
+}
+function stopFollow(msg) {
+  const F = P.follow; if (!F) return; P.follow = null; clearInterval(F.timer);
+  try { micClose(F.r); } catch (e) {}
+  showListen(); if (msg) pStatus(msg);
+}
+function showListen() { const on = !!P.follow; $('pListen').classList.toggle('live', on); $('pListen').setAttribute('aria-pressed', String(on)); $('pListen').textContent = on ? '● Listening' : 'Listen'; }
+function followTick(F) {
+  const r = F.r, ctx = audioCtx(), sr = ctx.sampleRate;
+  // keep the last F_WIN seconds
+  while (r.chunks.length > 1 && r.frames - F.dropped - r.chunks[0].length > F_WIN * sr) { F.dropped += r.chunks[0].length; r.chunks.shift(); }
+  if (P.rec || r.frame0 === null) return;
+  const n = r.frames - F.dropped; if (n < sr * 1.5) return;
+  const mono = new Float32Array(n); let o = 0; for (const c of r.chunks) { mono.set(c, o); o += c.length; }
+  const lat = latency(), base = (r.frame0 + F.dropped) / sr;
+  const on = detectOnsets(mono).filter(x => !looksLikeClick(x.feat)).map(x => base + x.t - lat);   // when you actually played (audio clock)
+  const now = ctx.currentTime, recent = on.filter(t => now - t < F_WIN);
+  if (recent.length < 4) { if (F.locked && recent.length === 0) pStatus(`Listening… (${P.bpm} BPM)`); return; }
+  if (now - recent[recent.length - 1] > 2.5) return;                                    // gone quiet: leave the click alone
+  let guess = F.locked ? P.bpm : tempoFromOnsets(recent);
+  if (!guess) return;
+  const fit = followTempo(recent, guess);
+  if (!fit || fit.R < 0.55) { pStatus(`Listening… not steady yet (${recent.length} hits)`); return; }
+  const bpm = Math.round((F.locked ? P.bpm + 0.5 * (fit.bpm - P.bpm) : fit.bpm) * 10) / 10;
+  const beat = 60 / bpm;
+  // which of your hits sit on beats: phase of the quarter grid from hits near it
+  let re = 0, im = 0; for (const t of recent) { const a = 2 * Math.PI * t / beat; re += Math.cos(a); im += Math.sin(a); }
+  const ph = ((Math.atan2(im, re) / (2 * Math.PI)) * beat + beat) % beat;             // your beats fall at ph + k*beat
+  P.bpm = bpm; $('pBpm').value = bpm; savePerfPrefs();
+  let C = P.clock;
+  if (!C) {
+    let t = ph + Math.ceil((now + 0.25 - ph) / beat) * beat;                             // your next beat
+    C = startClock(t); F.locked = true;
+    pStatus(`Locked on: ${bpm} BPM. The click is with you. Tap Record take when ready.`); return;
+  }
+  // nudge the running click: tempo, then phase (half the error each time)
+  const nextT = C.t0 + C.next * C.beat;
+  let err = ((ph - nextT) % beat + beat) % beat; if (err > beat / 2) err -= beat;
+  const corr = Math.abs(err) > 0.008 ? 0.5 * err : 0;
+  C.beat = beat; C.bar = 4 * beat; C.bpm = bpm; C.t0 = nextT + corr - C.next * beat;
+  F.locked = true;
+  pStatus(`Following: ${bpm} BPM${Math.abs(err) > 0.015 ? ` · nudging ${Math.round(err * 1000)} ms` : ' · in step'}`);
+}
 $('pListen').onclick = async () => {
-  try {
-    const { mono } = await listenFor(6, 'Clap or tap quarter notes now…');
-    const on = detectOnsets(mono).filter(o => !looksLikeClick(o.feat));
-    const b = tempoFromOnsets(on.map(o => o.t));
-    if (!b) { pStatus(`Heard ${on.length} hit(s); need at least 3 steady quarter notes. Try again.`); return; }
-    P.bpm = b; savePerfPrefs(); $('pBpm').value = b; if (P.clock && !P.rec) { stopClock(); startClock(); } pStatus(`Listened: ${b} BPM from ${on.length} hits.`);
-  } catch (err) { pStatus('Microphone not available: ' + err.message); }
+  if (P.follow) { stopFollow(`Stopped listening. Click stays at ${P.bpm} BPM.`); return; }
+  try { await startFollow(); } catch (err) { pStatus('Microphone not available: ' + err.message); }
 };
 async function teachSound(i) {
   try {
@@ -1119,23 +1178,24 @@ async function teachSound(i) {
 
 // Record a take: 1 bar count-in, then loop the bars until Stop. Every pass is layered (folded) into the loop.
 // The click: a free-running clock that keeps going between takes (Click button / closing the panel stops it)
-function startClock() {
+function startClock(at) {
   const ctx = audioCtx(), clicks = clickBuffers(ctx), beat = 60 / P.bpm;
   const gain = ctx.createGain(); gain.gain.value = P.clickVol; gain.connect(ctx.destination);
-  const C = { t0: ctx.currentTime + 0.4, beat, bar: 4 * beat, gain, next: 0, sched: [], bpm: P.bpm };
+  const C = { t0: at ?? ctx.currentTime + 0.4, beat, bar: 4 * beat, gain, next: 0, sched: [], bpm: P.bpm };
   const schedule = () => {
-    while (C.t0 + C.next * beat < ctx.currentTime + 0.5) {
-      const n = ctx.createBufferSource(); n.buffer = C.next % 4 === 0 ? clicks.accent : clicks.beat; n.connect(gain); n.start(C.t0 + C.next * beat);
-      C.sched.push(C.t0 + C.next * beat); if (C.sched.length > 4000) C.sched.splice(0, 2000); C.next++;
+    while (C.t0 + C.next * C.beat < ctx.currentTime + 0.12) {
+      const tt = C.t0 + C.next * C.beat;
+      const n = ctx.createBufferSource(); n.buffer = C.next % 4 === 0 ? clicks.accent : clicks.beat; n.connect(gain); n.start(Math.max(ctx.currentTime, tt));
+      C.sched.push(tt); if (C.sched.length > 4000) C.sched.splice(0, 2000); C.next++;
     }
   };
-  schedule(); C.timer = setInterval(schedule, 50);
+  schedule(); C.timer = setInterval(schedule, 25);
   P.clock = C; showClock();
   return C;
 }
 function stopClock() { if (!P.clock) return; clearInterval(P.clock.timer); try { P.clock.gain.disconnect(); } catch (e) {} P.clock = null; showClock(); }
 function showClock() { const on = !!P.clock; $('pClickBtn').classList.toggle('on', on); $('pClickBtn').textContent = on ? '■ Click' : '▶︎ Click'; }
-$('pClickBtn').onclick = () => { if (P.rec) return; if (P.clock) stopClock(); else startClock(); };
+$('pClickBtn').onclick = () => { if (P.rec) return; if (P.clock) { stopFollow(); stopClock(); } else startClock(); };
 
 // Record a take. Click not running: start it with a 1-bar count-in. Click running: start on the next bar line.
 $('pRec').onclick = async () => {
