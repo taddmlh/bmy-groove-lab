@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126p';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126p';
-import { detectGrid, barTimes } from './beats.js?b=20261126p';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126p';
-import { buildBank, bankFileName } from './bank.js?b=20261126p';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126p';
-import { denoise } from './denoise.js?b=20261126p';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126p';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126p';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126p';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126q';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126q';
+import { detectGrid, barTimes } from './beats.js?b=20261126q';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126q';
+import { buildBank, bankFileName } from './bank.js?b=20261126q';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126q';
+import { denoise } from './denoise.js?b=20261126q';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126q';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126q';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126q';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -393,7 +393,7 @@ function updateButtons() {
   const need = S.marks.filter(i => !covered(i)).length;
   $('extract').disabled = !S.mixBuf || !S.marks.length || busy;
   $('extract').textContent = !S.marks.length ? 'Extract drums' : need ? `Extract drums (${need} bar${need > 1 ? 's' : ''})` : 'Re-transcribe';
-  $('export').disabled = !S.marks.some(i => S.patterns.has(i)) || busy;
+  $('export').disabled = $('exportFile').disabled = !S.marks.some(i => S.patterns.has(i)) || busy;
   $('undo').disabled = !S.undo.length;
 }
 
@@ -1149,19 +1149,37 @@ function startPlay(from) {
 }
 
 // ---------------------------------------------------------------- export
-$('export').onclick = async () => {
+// Export: on iPad/iPhone, a bmydrummer:// link opens BMY straight away (needs BMY's Groove Lab link patch);
+// File… shares or saves the .bmybank file.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function makeBank() {
   const pats = S.marks.filter(i => S.patterns.has(i)).map(i => ({ name: `Bar ${barNo(i)}`, ...S.patterns.get(i) }));
-  if (!pats.length) return;
+  if (!pats.length) return null;
+  const bank = buildBank({ name: $('bankName').value || S.name, patterns: pats, swing: S.swing, bpm: S.grid.bpm });
+  return { bank, pats, fname: bankFileName(bank) };
+}
+const b64url = str => { const bytes = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+$('export').onclick = () => {
+  if (!isIOS) return exportFile();
   try {
-    const bank = buildBank({ name: $('bankName').value || S.name, patterns: pats, swing: S.swing, bpm: S.grid.bpm });
+    const x = makeBank(); if (!x) return;
+    const link = `bmydrummer://import?name=${encodeURIComponent(x.fname.replace(/\.bmybank$/, ''))}#${b64url(JSON.stringify(x.bank))}`;
+    log(`Sent "${x.fname}" to BMY by link: ${x.pats.length} patterns, ${x.pats.reduce((n, p) => n + p.cells.length, 0)} cells, link ${(link.length / 1024).toFixed(1)} KB`);
+    status('Opening BMY Drummer… (if nothing happens, BMY doesn’t have the Groove Lab link update yet: use File… instead)');
+    location.href = link;
+  } catch (err) { status('Export failed: ' + err.message); log('ERROR ' + errText(err)); }
+};
+$('exportFile').onclick = () => exportFile();
+async function exportFile() {
+  try {
+    const x = makeBank(); if (!x) return;
+    const { bank, pats, fname } = x;
     const json = JSON.stringify(bank, null, 2);
-    const fname = bankFileName(bank);
-    // BMY declares com.taddm.bmybank with MIME application/x-bmybank: using that type lets iOS offer BMY Drummer in the share sheet
     let file = new File([json], fname, { type: 'application/x-bmybank' });
-    if (navigator.canShare && !navigator.canShare({ files: [file] })) { file = new File([json], fname, { type: 'application/octet-stream' }); log('Share: x-bmybank not accepted, using a generic file type'); }
+    if (navigator.canShare && !navigator.canShare({ files: [file] })) file = new File([json], fname, { type: 'application/octet-stream' });
     log(`Exported "${fname}" (${file.type}): ${pats.length} patterns, ${pats.reduce((n, p) => n + p.cells.length, 0)} cells, ${bank.tempo ? bank.tempo.bpm + ' BPM' : 'no tempo'}`);
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: fname }); status(`Shared ${fname}. In the share sheet, choose BMY Drummer (or Save to Files).`); return; }
+      try { await navigator.share({ files: [file], title: fname }); status(`Shared ${fname}.`); return; }
       catch (e) { if (e.name === 'AbortError') return; log('Share failed, downloading instead: ' + e.message); }
     }
     const url = URL.createObjectURL(file), a = document.createElement('a');
@@ -1169,7 +1187,7 @@ $('export').onclick = async () => {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     status(`Saved ${fname} to Downloads. Tap it in Files to import it into BMY.`);
   } catch (err) { status('Export failed: ' + err.message); log('ERROR ' + errText(err)); }
-};
+}
 
 $('bankName').addEventListener('input', scheduleSave);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
@@ -1507,7 +1525,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26p';
+const BUILD = '2026-11-26q';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
