@@ -1,13 +1,13 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126i';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126i';
-import { detectGrid, barTimes } from './beats.js?b=20261126i';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126i';
-import { buildBank, bankFileName } from './bank.js?b=20261126i';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126i';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126i';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126i';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126i';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126j';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126j';
+import { detectGrid, barTimes } from './beats.js?b=20261126j';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126j';
+import { buildBank, bankFileName } from './bank.js?b=20261126j';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126j';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126j';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126j';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126j';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -634,6 +634,12 @@ async function stopRecording() {
   let pk = 0; for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > pk) pk = v; } }
   log(`Recorded ${(r.frames / SR).toFixed(1)} s from ${r.label}, peak ${pk > 0 ? Math.round(dbOf(pk)) + ' dB' : 'silent'}, sample rate ${audioCtx().sampleRate}`);
   if (pk < 0.001) { status('That recording is silent: no sound reached the input. Check the meter in the Record panel before you start.'); return; }
+  // normalise: loudest moment to -1 dBFS (boost at most +30 dB; never turn a loud clip down)
+  const target = Math.pow(10, -1 / 20), boost = Math.min(Math.pow(10, 30 / 20), target / pk);
+  if (boost > 1.05) {
+    for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] *= boost; }
+    log(`Normalised the recording: +${dbOf(boost).toFixed(1)} dB`);
+  }
   await openSong({ key: 'rec-' + when.getTime(), name, bytes: wavBytes(buf), type: 'audio/wav', buf });
 }
 function wavBytes(buf) {
@@ -1403,7 +1409,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26i';
+const BUILD = '2026-11-26j';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
