@@ -5,7 +5,7 @@ import { detectGrid, barTimes } from './beats.js';
 import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js';
 import { buildBank, bankFileName } from './bank.js';
 import { loadDemucs, separateDrums } from './demucs.js';
-import { renderBar, patternEvents } from './synth.js';
+import { renderRegion } from './synth.js';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -36,7 +36,7 @@ const S = {
 };
 let ort = null, actx = null;
 const TEST_NO_DEMUCS = new URLSearchParams(location.search).has('nodemucs');   // test hook: audio is already drums only
-if (TEST_NO_DEMUCS) window.GL = { S, get loop() { return srcNode && [srcNode.loopStart, srcNode.loopEnd]; }, get playing() { return playing; } };
+if (TEST_NO_DEMUCS) window.GL = { S, get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
 
 async function getOrt() {
   if (ort) return ort;
@@ -434,7 +434,7 @@ $('extract').onclick = async () => {
     buildPatterns(!todo.length);
     S.tab = S.marks.find(i => S.patterns.has(i)) ?? null;
     crumbDone();
-    status(`Done. Swing ${S.swing.type === 'Off' ? 'off' : S.swing.type + ' ' + S.swing.depth + '%'}. Check each pattern (play Pattern vs Drums), then Export to BMY.`, 1);
+    status(`Done. Swing ${S.swing.type === 'Off' ? 'off' : S.swing.type + ' ' + S.swing.depth + '%'}. Check each pattern (turn on Drums and Pattern to hear them together), then Export to BMY.`, 1);
   } catch (err) {
     crumbDone(); status('Extraction failed: ' + err.message); log('ERROR ' + (err.stack || err));
   } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); }
@@ -563,54 +563,82 @@ $('swType').onchange = () => { S.swing = { type: $('swType').value, depth: $('sw
 $('swDepth').onchange = () => { S.swing.depth = Math.max(0, Math.min(100, Math.round(+$('swDepth').value || 0))); renderGrid(); syncPlayback(); };
 $('hatRide').onchange = () => { const p = S.patterns.get(S.tab); if (!p) return; p.hatUseAlt = $('hatRide').checked ? 1 : 0; p.edited = true; renderGrid(); syncPlayback(); };
 
-// ---------------------------------------------------------------- playback
-let playing = false, srcNode = null, playT0 = 0, playA = 0, playLen = 0, raf = 0;
-let posNow = 0, lastCtxT = 0, loopA = 0, loopB = 0;   // song-time position of the playing source and its loop
-/** Make what's playing follow the current selection, bar lines, swing and pattern. */
-function syncPlayback(live) {
-  if (!playing || !srcNode) return;
-  if (live && S.src === 'pattern') return;   // re-render the pattern once, on release
-  if (S.src === 'pattern' || !S.loop) { startPlay(); return; }
-  if (!S.sel) return;
-  const a = Math.max(0, S.sel.a), b = Math.min(S.dur, S.sel.b);
-  if (b - a < 0.05) return;
-  if (posNow < a - 0.01 || posNow >= b) { startPlay(); return; }
-  srcNode.loopStart = a; srcNode.loopEnd = b; loopA = a; loopB = b;
+// ---------------------------------------------------------------- playback (3-channel mixer)
+const CH = ['mix', 'drums', 'pattern'];
+const MIX_DEFAULT = { mix: { on: true, vol: 80 }, drums: { on: false, vol: 80 }, pattern: { on: false, vol: 70 } };
+try { S.mixer = JSON.parse(localStorage.getItem('bmyGLMixer')) || MIX_DEFAULT; } catch (e) { S.mixer = MIX_DEFAULT; }
+for (const c of CH) S.mixer[c] = Object.assign({}, MIX_DEFAULT[c], S.mixer[c]);
+const gainOf = c => (S.mixer[c].on ? Math.pow(S.mixer[c].vol / 100, 2) : 0);
+function saveMixer() { try { localStorage.setItem('bmyGLMixer', JSON.stringify(S.mixer)); } catch (e) {} }
+function showMixer() {
+  for (const c of CH) { $('ch-' + c).setAttribute('aria-pressed', S.mixer[c].on); $('vol-' + c).value = S.mixer[c].vol; }
 }
-document.querySelectorAll('#srcSeg button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('#srcSeg button').forEach(x => x.classList.toggle('on', x === b));
-  S.src = b.dataset.src; if (playing) startPlay();
-});
-$('loop').onclick = () => { S.loop = !S.loop; $('loop').classList.toggle('on', S.loop); if (playing) startPlay(); };
+for (const c of CH) {
+  $('ch-' + c).onclick = () => { S.mixer[c].on = !S.mixer[c].on; showMixer(); saveMixer(); applyGains(); };
+  $('vol-' + c).oninput = () => { S.mixer[c].vol = +$('vol-' + c).value; if (!S.mixer[c].on) { S.mixer[c].on = true; showMixer(); } saveMixer(); applyGains(); };
+}
+showMixer();
+
+let playing = false, nodes = {}, gains = {}, raf = 0, patA = 0;
+let posNow = 0, lastCtxT = 0, loopA = 0, loopB = 0;   // song-time position and loop region
+function applyGains() {
+  if (!actx) return;
+  for (const c of CH) if (gains[c]) gains[c].gain.setTargetAtTime(gainOf(c), actx.currentTime, 0.015);
+}
+function killNodes() {
+  for (const c of CH) if (nodes[c]) { try { nodes[c].stop(); } catch (e) {} nodes[c].disconnect(); }
+  nodes = {};
+}
+/** Bars whose patterns play in [a, b): marked bars with patterns; if none, the open tab's pattern on every bar. */
+function patternItems(a, b) {
+  const inRange = S.bars.filter(x => x.end > a && x.start < b);
+  let items = inRange.filter(x => S.patterns.has(x.i)).map(x => ({ start: x.start, stepSec: x.step, pattern: S.patterns.get(x.i) }));
+  const tabP = S.tab !== null && S.patterns.get(S.tab);
+  if (!items.length && tabP) items = inRange.map(x => ({ start: x.start, stepSec: x.step, pattern: tabP }));
+  return items;
+}
+/** Keep playing, but follow the current selection, bar lines, swing and pattern. live = mid-drag. */
+function syncPlayback(live) {
+  if (!playing) return;
+  const a = S.sel ? Math.max(0, S.sel.a) : loopA, b = S.sel ? Math.min(S.dur, S.sel.b) : loopB;
+  if (b - a < 0.05) return;
+  const outside = posNow < a - 0.01 || posNow >= b;
+  if (live && !outside && S.loop) {                 // move the loop points of song + drums; pattern catches up on release
+    for (const c of ['mix', 'drums']) if (nodes[c]) { nodes[c].loopStart = a; nodes[c].loopEnd = b; }
+    loopA = a; loopB = b; return;
+  }
+  startPlay(outside ? a : posNow);
+}
+$('loop').onclick = () => { S.loop = !S.loop; $('loop').classList.toggle('on', S.loop); if (playing) startPlay(posNow); };
 $('play').onclick = () => (playing ? stopPlay() : startPlay());
 function stopPlay() {
-  if (srcNode) { try { srcNode.stop(); } catch (e) {} srcNode.disconnect(); srcNode = null; }
-  playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶︎ Play';
+  killNodes(); playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶︎ Play';
 }
-function startPlay() {
+function startPlay(from) {
   if (!S.mixBuf) return;
   const ctx = audioCtx();
-  if (srcNode) { try { srcNode.stop(); } catch (e) {} srcNode.disconnect(); srcNode = null; }
-  let buf, a, b;
-  if (S.src === 'pattern') {
-    const p = S.patterns.get(S.tab);
-    if (!p) { status('No pattern yet: extract drums first.'); stopPlay(); return; }
-    buf = renderBar(ctx, p, S.swing, S.grid.bpm); a = 0; b = buf.duration;
-    playA = S.bars[S.tab].start;
-  } else {
-    buf = S.src === 'drums' ? S.drumBuf : S.mixBuf;
-    if (!buf) { status('No drums yet: mark bars and tap Extract drums.'); stopPlay(); return; }
-    a = S.sel ? Math.max(0, S.sel.a) : S.playhead; b = S.sel ? Math.min(S.dur, S.sel.b) : S.dur;
-    if (S.playhead > a && S.playhead < b - 0.05 && !S.sel) a = S.playhead;
-    playA = a;
-  }
-  srcNode = ctx.createBufferSource(); srcNode.buffer = buf; srcNode.connect(ctx.destination);
-  srcNode.loop = S.loop; srcNode.loopStart = a; srcNode.loopEnd = b;
-  srcNode.onended = () => { if (playing && !S.loop) stopPlay(); };
-  playT0 = ctx.currentTime + 0.03; playLen = b - a;
-  posNow = a; lastCtxT = playT0; loopA = a; loopB = b;
-  if (S.loop) srcNode.start(playT0, a); else srcNode.start(playT0, a, b - a);
+  killNodes();
+  let a = S.sel ? Math.max(0, S.sel.a) : S.playhead, b = S.sel ? Math.min(S.dur, S.sel.b) : S.dur;
+  if (!S.sel) b = Math.min(S.dur, a + 120);
+  if (b - a < 0.05) return;
+  let pos = from !== undefined && from >= a && from < b ? from : a;
+  const t0 = ctx.currentTime + 0.04;
+  const make = (c, buf, ls, le, offset) => {
+    if (!gains[c]) { gains[c] = ctx.createGain(); gains[c].connect(ctx.destination); }
+    gains[c].gain.setValueAtTime(gainOf(c), ctx.currentTime);
+    const n = ctx.createBufferSource(); n.buffer = buf; n.connect(gains[c]);
+    n.loop = S.loop; n.loopStart = ls; n.loopEnd = le;
+    if (S.loop) n.start(t0, offset); else n.start(t0, offset, Math.max(0, le - offset));
+    nodes[c] = n;
+  };
+  make('mix', S.mixBuf, a, b, pos);
+  if (S.drumBuf) make('drums', S.drumBuf, a, b, pos);
+  const items = patternItems(a, b);
+  if (items.length) { patA = a; make('pattern', renderRegion(ctx, a, b, items, S.swing), 0, b - a, pos - a); }
+  nodes.mix.onended = () => { if (playing && !S.loop) stopPlay(); };
+  posNow = pos; lastCtxT = t0; loopA = a; loopB = b;
   playing = true; $('play').textContent = '■ Stop';
+  if (!S.drumBuf && S.mixer.drums.on) status('Drums are silent until you extract them.');
   cancelAnimationFrame(raf);
   const tick = () => {
     if (!playing) return;
@@ -618,7 +646,7 @@ function startPlay() {
     if (now > lastCtxT) { posNow += now - lastCtxT; lastCtxT = now; }
     if (S.loop && posNow >= loopB) posNow = loopA + ((posNow - loopB) % (loopB - loopA));
     if (!S.loop) posNow = Math.min(posNow, loopB);
-    S.playhead = S.src === 'pattern' ? playA + (posNow - loopA) * barSec() / (loopB - loopA) : posNow;
+    S.playhead = posNow;
     drawRuler(); drawWave($('wMix'), S.mixMono, '#9aa3b5'); drawWave($('wDrums'), S.drumMono, '#ec8a2c', S.extracted);
     raf = requestAnimationFrame(tick);
   };

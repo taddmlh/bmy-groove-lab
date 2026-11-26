@@ -66,3 +66,20 @@ export function renderBar(ctx, pattern, swing, bpm) {
   }
   return buf;
 }
+
+/**
+ * Region [a, b) of the song as an AudioBuffer: each item {start, stepSec, pattern} is a bar whose
+ * pattern plays at its place in the song. Used to hear patterns in parallel with the song and stem.
+ */
+export function renderRegion(ctx, a, b, items, swing) {
+  const len = Math.max(1, Math.round((b - a) * SR));
+  const buf = ctx.createBuffer(2, len, SR);
+  const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  for (const it of items) for (const e of patternEvents(it.pattern, swing)) {
+    const t = it.start + e.step * it.stepSec - a;
+    if (t < -0.01 || t >= b - a) continue;
+    const v = voice(e.voice), g = (VEL_MIDI[e.vel] || 82) / 127, s0 = Math.round(t * SR);
+    for (let i = 0; i < v.length; i++) { const j = s0 + i; if (j >= 0 && j < len) { L[j] += v[i] * g; R[j] += v[i] * g; } }
+  }
+  return buf;
+}

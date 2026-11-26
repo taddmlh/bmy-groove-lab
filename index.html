@@ -34,6 +34,12 @@ input[type=number]{width:96px;text-align:right}
 .seg button{border:0;border-radius:0;background:transparent}
 .seg button.on{background:#2b2f3a}
 .label{color:var(--dim);font-size:13px}
+.mixer{display:inline-flex;flex-wrap:wrap;gap:6px}
+.ch{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:0 8px 0 0;background:var(--panel)}
+.ch button{border:0;border-right:1px solid var(--line);border-radius:10px 0 0 10px;min-width:70px;color:var(--dim)}
+.ch button[aria-pressed=true]{color:#000;background:var(--chc,#9aa3b5);font-weight:600}
+#ch-drums{--chc:#ec8a2c}#ch-pattern{--chc:#26c7ff}
+.ch input[type=range]{width:clamp(56px,6vw,96px);height:40px;accent-color:var(--acc);margin:0}
 .title{font-weight:600;font-size:17px;max-width:30vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #overview{height:34px;width:100%;display:block;background:var(--panel);border-radius:8px;touch-action:none}
 #detail{position:relative;background:var(--panel);border-radius:10px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
@@ -62,7 +68,8 @@ input[type=number]{width:96px;text-align:right}
 details{font-size:12px;color:var(--dim)}
 details pre{white-space:pre-wrap;max-height:30vh;overflow:auto;margin:6px 0}
 .hidden{display:none!important}
-@media (max-width:820px){.title{max-width:44vw}.hide-narrow{display:none}}
+@media (max-width:1500px){.hide-narrow{display:none}}
+@media (max-width:820px){.title{max-width:44vw}}
 @media (prefers-reduced-motion:reduce){.prog>i{transition:none}}
 </style>
 </head>
@@ -91,15 +98,17 @@ details pre{white-space:pre-wrap;max-height:30vh;overflow:auto;margin:6px 0}
       <div style="position:relative"><canvas id="wDrums"></canvas><span class="tracklabel" style="top:4px">Drums</span></div>
     </div>
     <div class="bar">
-      <div id="srcSeg" class="seg" role="group" aria-label="Play source">
-        <button data-src="mix" class="on">Song</button><button data-src="drums">Drums</button><button data-src="pattern">Pattern</button>
+      <div class="mixer" role="group" aria-label="Mixer">
+        <span class="ch"><button id="ch-mix" aria-pressed="true">Song</button><input id="vol-mix" type="range" min="0" max="100" aria-label="Song volume"></span>
+        <span class="ch"><button id="ch-drums" aria-pressed="false">Drums</button><input id="vol-drums" type="range" min="0" max="100" aria-label="Drums volume"></span>
+        <span class="ch"><button id="ch-pattern" aria-pressed="false">Pattern</button><input id="vol-pattern" type="range" min="0" max="100" aria-label="Pattern volume"></span>
       </div>
       <button id="play" class="primary" style="min-width:92px">▶︎ Play</button>
       <button id="loop" class="on">Loop</button>
       <span id="selText" class="label hide-narrow"></span>
       <span class="grow"></span>
       <button id="zoomOut" title="Zoom out">−</button><button id="zoomIn" title="Zoom in">+</button>
-      <button id="markSel">Mark selection</button>
+      <button id="markSel">Mark sel.</button>
       <button id="clearMarks">Clear marks</button>
       <button id="extract" class="primary" disabled>Extract drums</button>
     </div>
