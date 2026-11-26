@@ -8,11 +8,13 @@ const CPU_NODES = ['/ReduceMean', '/Sub', '/Pow', '/ReduceMean_1', '/Clip', '/Sq
 const TS = 343980, BINS = 2048, FRAMES = 336, STRIDE = Math.floor(TS * 0.75);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-export const SEPARATOR_VERSION = 'lean-3';
+export const SEPARATOR_VERSION = 'lean-4';
 let dw = null, model = null;
 
+// lean: no buffer pooling, so graphics memory freed by one part is really given back before the next part
+const LEAN_GPU = { storageBufferCacheMode: 'disabled', defaultBufferCacheMode: 'disabled' };
 const sessOpts = (i, final, lean) => ({
-  executionProviders: i === 0 ? [{ name: 'webgpu', forceCpuNodeNames: CPU_NODES }] : ['webgpu'],
+  executionProviders: [{ name: 'webgpu', ...(i === 0 ? { forceCpuNodeNames: CPU_NODES } : {}), ...(lean ? LEAN_GPU : {}) }],
   graphOptimizationLevel: 'all',
   preferredOutputLocation: final || lean ? 'cpu' : 'gpu-buffer'   // lean: results go through normal memory, so a part can be closed safely
 });
