@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126w';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126x';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
@@ -198,8 +198,20 @@ export function barToPattern(hits, bar, swing) {
           hq.forEach(x => { x.used = true; });
         }
       }
-      // doubles (two strokes a 32nd apart) and flams (soft grace 8-45 ms before the main stroke)
+      // ruffs: three strokes inside about one 16th (each 0.2-0.45 step apart) -> t16 on the first stroke's step
       const rest = qs.filter(x => !x.used).sort((x, y) => x.q - y.q);
+      for (let k = 0; k + 2 < rest.length; k++) {
+        const [x, y, z] = [rest[k], rest[k + 1], rest[k + 2]];
+        if (x.used || y.used || z.used) continue;
+        const g1 = y.q - x.q, g2 = z.q - y.q;
+        if (g1 >= 0.2 && g1 <= 0.45 && g2 >= 0.2 && g2 <= 0.45 && z.q - x.q <= 0.85) {
+          const step = Math.min(15, beat * 4 + nearest(x.q, grid).i);
+          cells.push({ lane, step, velocity: x.h.vel, ornament: 't16', tripletPattern: '111', note2Velocity: y.h.vel, note3Velocity: z.h.vel });
+          x.used = y.used = z.used = true;
+          for (const [st, c] of [...taken]) if (st === step) taken.delete(st);
+        }
+      }
+      // doubles (two strokes a 32nd apart) and flams (soft grace 8-45 ms before the main stroke)
       for (let k = 0; k + 1 < rest.length; k++) {
         const x = rest[k], y = rest[k + 1];
         if (x.used || y.used) continue;
@@ -224,7 +236,7 @@ export function barToPattern(hits, bar, swing) {
     cells.push(...taken.values());
   }
   // drop straight cells covered by a triplet in the same lane
-  const multi = c => c.ornament === 't4' || c.ornament === 't8';
+  const multi = c => c.ornament === 't4' || c.ornament === 't8' || c.ornament === 't16';
   const out = cells.filter(c => multi(c) || !cells.some(t => multi(t) && t.lane === c.lane && c.step >= t.step && c.step < t.step + SPANS[t.ornament]));
   out.sort((a, b) => a.step - b.step || LANES.findIndex(l => l.role === a.lane) - LANES.findIndex(l => l.role === b.lane));
   return { cells: out, hatUseAlt: rideBar ? 1 : 0, notes };

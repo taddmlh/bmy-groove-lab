@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126w';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126w';
-import { detectGrid, barTimes } from './beats.js?b=20261126w';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126w';
-import { buildBank, bankFileName } from './bank.js?b=20261126w';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126w';
-import { denoise } from './denoise.js?b=20261126w';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126w';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126w';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126w';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126x';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126x';
+import { detectGrid, barTimes } from './beats.js?b=20261126x';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126x';
+import { buildBank, bankFileName } from './bank.js?b=20261126x';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126x';
+import { denoise } from './denoise.js?b=20261126x';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126x';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126x';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126x';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -889,7 +889,7 @@ function doubleStrokes(bars) {
     const around = []; for (let f = n0; f <= n1; f++) if (Math.abs(f - pf) > 1) around.push(val(f));
     around.sort((x, y) => x - y); const floor = around.length ? around[Math.floor(around.length / 2)] : 0;
     const t = (pf + fr.f0) / FPS;
-    if (pf > 0 && pk > 0.12 * main && pk > 2.8 * floor + 0.25 && !S.hits.some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))
+    if (pf > 0 && pk > 0.12 * main && pk > 2.8 * floor + 0.25 && !S.hits.concat(out).some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))   // once only (two hits can see the same stroke)
       out.push({ time: t, cls: h.cls, lane: h.lane, vel: 'sf', levelDb: (h.levelDb || 0) - 10, ghost: true });
   }
   return out;
@@ -1559,7 +1559,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26w';
+const BUILD = '2026-11-26x';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 // ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
