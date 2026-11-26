@@ -10,6 +10,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let dw = null, model = null;
 
+const sessOpts = (i, final) => ({
+  executionProviders: i === 0 ? [{ name: 'webgpu', forceCpuNodeNames: CPU_NODES }] : ['webgpu'],
+  graphOptimizationLevel: 'all',
+  preferredOutputLocation: final ? 'cpu' : 'gpu-buffer'
+});
+
 async function cachedBytes(url) {
   let cache = null;
   try { cache = await caches.open(CACHE); } catch (e) {}
@@ -26,31 +32,30 @@ async function cachedBytes(url) {
 
 export function demucsLoaded() { return !!model; }
 
-export async function loadDemucs(ort, onStatus = () => {}) {
-  if (model) return model;
-  if (!('gpu' in navigator)) throw new Error('This browser has no WebGPU, which drum separation needs (iPadOS 26 or later).');
+/** lean = phone: keep only the downloaded parts; each part is opened just before it runs and closed straight after (much less memory). */
+export async function loadDemucs(ort, onStatus = () => {}, { lean = false } = {}) {
+  if (model && model.lean === lean) return model;
+  model = null;
+  if (!('gpu' in navigator)) throw new Error('This browser has no WebGPU, which drum separation needs (iOS/iPadOS 26 or later).');
   dw = dw || await import('https://cdn.jsdelivr.net/npm/demucs-web@1.0.2/src/processor.js');
   const man = JSON.parse(new TextDecoder().decode(await cachedBytes(SPLIT_BASE + 'htdemucs_split_manifest.json')));
   const n = man.pieces.length, pieces = [], lastUse = {};
   man.pieces.forEach((p, i) => p.inputs.forEach(k => { lastUse[k] = i; }));
   for (let i = 0; i < n; i++) {
     const p = man.pieces[i];
-    onStatus(`Loading drum separator, part ${i + 1} of ${n}…`, i / n, `loading separator part ${i + 1}`);
-    const bytes = await cachedBytes(SPLIT_BASE + p.file);
+    onStatus(`${lean ? 'Checking' : 'Loading'} drum separator, part ${i + 1} of ${n}…`, i / n, `loading separator part ${i + 1}`);
     const final = p.outputs.includes(man.outputs.freq) || p.outputs.includes(man.outputs.time);
-    const session = await ort.InferenceSession.create(bytes, {
-      executionProviders: i === 0 ? [{ name: 'webgpu', forceCpuNodeNames: CPU_NODES }] : ['webgpu'],
-      graphOptimizationLevel: 'all',
-      preferredOutputLocation: final ? 'cpu' : 'gpu-buffer'
-    });
-    pieces.push({ session, inputs: p.inputs });
+    if (lean) { await cachedBytes(SPLIT_BASE + p.file); pieces.push({ url: SPLIT_BASE + p.file, inputs: p.inputs, final, i }); continue; }
+    const bytes = await cachedBytes(SPLIT_BASE + p.file);
+    const session = await ort.InferenceSession.create(bytes, sessOpts(i, final));
+    pieces.push({ session, inputs: p.inputs, final, i });
     await sleep(5);
   }
-  model = { pieces, lastUse, freq: man.outputs.freq, time: man.outputs.time };
+  model = { pieces, lastUse, freq: man.outputs.freq, time: man.outputs.time, lean };
   return model;
 }
 
-async function runSegment(ort, input) {
+async function runSegment(ort, input, onPart = () => {}) {
   const m = model;
   const env = {
     mix: new ort.Tensor('float32', input.waveform, [1, 2, TS]),
@@ -60,7 +65,14 @@ async function runSegment(ort, input) {
   for (let i = 0; i < m.pieces.length; i++) {
     const p = m.pieces[i];
     const feeds = {}; for (const k of p.inputs) feeds[k] = env[k];
-    Object.assign(env, await p.session.run(feeds));
+    onPart(i + 1, m.pieces.length);
+    if (m.lean) {
+      let bytes = await cachedBytes(p.url);
+      const session = await ort.InferenceSession.create(bytes, sessOpts(p.i, p.final)); bytes = null;
+      Object.assign(env, await session.run(feeds));
+      if (dev) { try { await dev.queue.onSubmittedWorkDone(); } catch (e) {} }
+      try { await session.release(); } catch (e) {}
+    } else Object.assign(env, await p.session.run(feeds));
     for (const k of p.inputs) if (m.lastUse[k] === i && k !== 'mix' && k !== 'mag') { try { env[k].dispose(); } catch (e) {} delete env[k]; }
     if (dev) { try { await dev.queue.onSubmittedWorkDone(); } catch (e) {} }
     await sleep(1);
@@ -69,7 +81,7 @@ async function runSegment(ort, input) {
 }
 
 /** Drums only. L, R: Float32Array at 44.1 kHz. onProg(fraction). Returns {left, right}. */
-export async function separateDrums(ort, L, R, onProg = () => {}) {
+export async function separateDrums(ort, L, R, onProg = () => {}, onPart = () => {}) {
   const total = L.length;
   const nSeg = Math.ceil(Math.max(0, total - TS) / STRIDE) + 1;
   const left = new Float32Array(total), right = new Float32Array(total), w = new Float32Array(total);
@@ -78,7 +90,7 @@ export async function separateDrums(ort, L, R, onProg = () => {}) {
     const segLen = Math.min(TS, total - start);
     const sl = new Float32Array(TS), sr = new Float32Array(TS);
     sl.set(L.subarray(start, start + segLen)); sr.set(R.subarray(start, start + segLen));
-    const r = await runSegment(ort, dw.prepareModelInput(sl, sr));
+    const r = await runSegment(ort, dw.prepareModelInput(sl, sr), (i, n) => onPart(seg + 1, nSeg, i, n));
     const drums = dw.standaloneIspec(dw.standaloneMask(r.freq)[0], TS);   // track 0 = drums
     const ns = r.dims[3];
     for (let i = 0; i < segLen; i++) {

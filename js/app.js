@@ -657,7 +657,8 @@ $('extract').onclick = async () => {
     const todo = S.marks.filter(i => !covered(i));
     if (todo.length) {
       crumb('loading separator');
-      if (!TEST_NO_DEMUCS) await loadDemucs(o, (m, f, c) => { status(m, f * 0.3); if (c) crumb(c); });
+      const lean = /iPhone|iPod/.test(navigator.userAgent) || phoneMQ.matches || /[?&]lean\b/.test(location.search);
+      if (!TEST_NO_DEMUCS) { await loadDemucs(o, (m, f, c) => { status(m, f * 0.3); if (c) crumb(c); }, { lean }); log(`Drum separator ready (${lean ? 'low-memory mode: one part at a time' : 'all parts loaded'})`); }
       // regions: each bar +-1 s, merged when close
       const regs = todo.map(i => [Math.max(0, S.bars[i].start - 1), Math.min(S.dur, S.bars[i].end + 1)]).sort((a, b) => a[0] - b[0]);
       const merged = [];
@@ -672,7 +673,8 @@ $('extract').onclick = async () => {
         const s0 = Math.floor(a * SR), s1 = Math.floor(b * SR);
         crumb(`separating ${a.toFixed(1)}-${b.toFixed(1)} s`);
         const t = performance.now();
-        const d = TEST_NO_DEMUCS ? { left: L.slice(s0, s1), right: R.slice(s0, s1) } : await separateDrums(o, L.subarray(s0, s1), R.subarray(s0, s1), p => status(`Separating drums… ${Math.round((done + p * (b - a)) / total * 100)}%`, 0.3 + 0.55 * (done + p * (b - a)) / total));
+        const d = TEST_NO_DEMUCS ? { left: L.slice(s0, s1), right: R.slice(s0, s1) } : await separateDrums(o, L.subarray(s0, s1), R.subarray(s0, s1), p => status(`Separating drums… ${Math.round((done + p * (b - a)) / total * 100)}%`, 0.3 + 0.55 * (done + p * (b - a)) / total),
+          (sg, ns, i, n) => { crumb(`separating ${a.toFixed(1)}-${b.toFixed(1)} s, segment ${sg}/${ns}, part ${i}/${n}`); if (lean) status(`Separating drums… segment ${sg} of ${ns}, part ${i} of ${n}`, 0.3 + 0.55 * (done + ((sg - 1) + i / n) / ns * (b - a)) / total); });
         log(`Separated ${a.toFixed(1)}–${b.toFixed(1)} s in ${((performance.now() - t) / 1000).toFixed(1)} s`);
         S.drumBuf.getChannelData(0).set(d.left, s0); S.drumBuf.getChannelData(1).set(d.right, s0);
         for (let i = 0; i < d.left.length; i++) S.drumMono[s0 + i] = 0.5 * (d.left[i] + d.right[i]);
