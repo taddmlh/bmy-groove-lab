@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126n';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126n';
-import { detectGrid, barTimes } from './beats.js?b=20261126n';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126n';
-import { buildBank, bankFileName } from './bank.js?b=20261126n';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126n';
-import { denoise } from './denoise.js?b=20261126n';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126n';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126n';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126n';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126o';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126o';
+import { detectGrid, barTimes } from './beats.js?b=20261126o';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126o';
+import { buildBank, bankFileName } from './bank.js?b=20261126o';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126o';
+import { denoise } from './denoise.js?b=20261126o';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126o';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126o';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126o';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1089,6 +1089,10 @@ $('gridPlay').onclick = () => $('play').click();
 $('play').onclick = () => { if (!playing && P.clock && !P.rec) stopClock(); return playing ? stopPlay() : startPlay(); };
 // playhead on the pattern grid: where playback is inside the bar on screen
 function drawGridHead(t) {
+  if (t != null && playing) {                       // follow playback: show the pattern of the marked bar being played
+    const i = S.marks.find(m => t >= S.bars[m].start && t < S.bars[m].end);
+    if (i !== undefined && i !== S.tab && S.patterns.has(i)) { S.tab = i; renderTabs(); renderGrid(); }
+  }
   const g = $('grid'); let el = $('gridHead');
   const bar = S.tab != null && S.bars[S.tab], row = g.querySelector('.row');
   const frac = bar && t != null ? (t - bar.start) / (bar.end - bar.start) : -1;
@@ -1501,7 +1505,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26n';
+const BUILD = '2026-11-26o';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
