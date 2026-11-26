@@ -1,6 +1,6 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS } from './dsp.js';
-import { loadAdtof, activations, hitsFrom } from './adtof.js';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js';
 import { detectGrid, barTimes } from './beats.js';
 import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js';
 import { buildBank, bankFileName } from './bank.js';
@@ -384,7 +384,7 @@ async function openSong({ key, name, bytes, type, buf }) {
     if (!buf) buf = await audioCtx().decodeAudioData(bytes.slice(0));
     S.locked = false;
     Object.assign(S, { key, name, dur: buf.duration, mixBuf: buf, drumBuf: null, drumMono: null, extracted: [],
-      hits: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null, swing: { type: 'Off', depth: 0 } });
+      hits: [], flux: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null, swing: { type: 'Off', depth: 0 } });
     S.mixMono = toMono(buf.getChannelData(0), buf.numberOfChannels > 1 ? buf.getChannelData(1) : null);
     $('songTitle').textContent = S.name; $('bankName').value = S.name;
     log(`Opened "${name}": ${buf.duration.toFixed(1)} s`);
@@ -422,6 +422,7 @@ function snapshot() {
     sel: S.sel && { ...S.sel }, view: { ...S.view }, mixer: S.mixer, bankName: $('bankName').value,
     extracted: S.extracted.map(r => [...r]),
     hits: S.hits.map(h => ({ time: h.time, cls: h.cls, strength: h.strength, levelDb: h.levelDb, decay: h.decay, pitch: h.pitch })),
+    flux: (S.flux || []).map(r => ({ a: r.a, b: r.b, f0: r.f0, frames: r.frames, data: Array.from(r.data, v => Math.round(v * 100) / 100) })),
     patterns: [...S.patterns.entries()].map(([i, p]) => [i, { cells: p.cells, hatUseAlt: p.hatUseAlt, notes: p.notes || [], edited: !!p.edited }])
   };
 }
@@ -429,7 +430,7 @@ async function restoreState(st) {
   S.grid = { ...st.grid }; rebuildBars();
   S.locked = !!st.locked; S.marks = (st.marks || []).filter(i => i < S.bars.length);
   S.swing = st.swing || { type: 'Off', depth: 0 };
-  S.hits = st.hits || []; S.patterns = new Map((st.patterns || []).filter(([i]) => i < S.bars.length));
+  S.hits = st.hits || []; S.flux = (st.flux || []).map(r => ({ ...r, data: Float32Array.from(r.data) })); S.patterns = new Map((st.patterns || []).filter(([i]) => i < S.bars.length));
   S.tab = S.patterns.has(st.tab) || S.marks.includes(st.tab) ? st.tab : (S.marks[0] ?? null);
   S.sel = st.sel || null; if (st.view) S.view = { ...st.view };
   if (st.bankName) $('bankName').value = st.bankName;
@@ -661,18 +662,11 @@ $('extract').onclick = async () => {
         for (let i = 0; i < d.left.length; i++) S.drumMono[s0 + i] = 0.5 * (d.left[i] + d.right[i]);
         S.extracted.push([a, b]); done += b - a;
         redraw();
-        // transcribe this region
-        crumb('transcribing');
         status('Finding hits…', 0.86 + 0.1 * done / total); await yieldUI();
-        await loadAdtof(o, 'models/adtof.onnx');
-        const mono = S.drumMono.subarray(s0, s1);
-        const spec = logSpec(mono);
-        const { act, frames } = await activations(o, mono, spec);
-        const hits = hitsFrom(act, frames).map(h => ({ ...h, time: h.time + s0 / SR }));
-        describeHits(hits, spec.data, spec.frames, Math.round(s0 / SR * FPS));
-        S.hits = S.hits.filter(h => h.time < a || h.time >= b).concat(hits).sort((x, y) => x.time - y.time);
-        log(`Hits in ${a.toFixed(1)}–${b.toFixed(1)} s: ${countBy(hits)}`);
+        await transcribeRegion(o, a, b);
       }
+    } else {                                  // Re-transcribe: run the drum transcriber again on the drums we already have
+      for (const [a, b] of S.extracted) { status(`Finding hits ${a.toFixed(1)}–${b.toFixed(1)} s…`); await yieldUI(); await transcribeRegion(o, a, b); }
     }
     buildPatterns(!todo.length);
     S.tab = S.marks.find(i => S.patterns.has(i)) ?? null;
@@ -682,6 +676,46 @@ $('extract').onclick = async () => {
     crumbDone(); status('Extraction failed: ' + err.message); log('ERROR ' + (err.stack || err));
   } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); saveNow(); saveStems(); }
 };
+const FLUX_BANDS = Object.fromEntries(Object.entries({ kick: [30, 150], snare: [150, 5000], tom: [60, 600], hihat: [5000, 16000], cymbal: [3000, 16000] })
+  .map(([k, [lo, hi]]) => [k, [...Array(NBANDS).keys()].filter(i => BAND_FREQ[i] >= lo && BAND_FREQ[i] < hi)]));
+/** Second strokes of doubles: a clear level jump on the same drum 0.3-0.7 step after a hit. */
+function doubleStrokes(bars) {
+  const out = [];
+  for (const h of S.hits) {
+    const b = bars.find(x => h.time >= x.start - x.step / 2 && h.time < x.end - x.step / 2); if (!b) continue;
+    if (!['kick', 'snare', 'tom'].includes(h.cls)) continue;   // hats/cymbals pick up snare noise
+    const c = CLASSES.indexOf(h.cls), fr = (S.flux || []).find(r => h.time >= r.a && h.time < r.b); if (c < 0 || !fr) continue;
+    const at = t => Math.round(t * FPS) - fr.f0, val = f => (f > 0 && f < fr.frames ? fr.data[f * 5 + c] : 0);
+    const fh = at(h.time); let main = 0; for (let f = fh - 2; f <= fh + 2; f++) main = Math.max(main, val(f));
+    const w0 = at(h.time + 0.3 * b.step), w1 = at(h.time + 0.7 * b.step), n0 = at(h.time + 0.15 * b.step), n1 = at(h.time + 0.85 * b.step);
+    let pk = 0, pf = -1; for (let f = w0; f <= w1; f++) if (val(f) > pk) { pk = val(f); pf = f; }
+    const around = []; for (let f = n0; f <= n1; f++) if (Math.abs(f - pf) > 1) around.push(val(f));
+    around.sort((x, y) => x - y); const floor = around.length ? around[Math.floor(around.length / 2)] : 0;
+    const t = (pf + fr.f0) / FPS;
+    if (pf > 0 && pk > 0.1 * main && pk > 2.5 * floor + 0.2 && !S.hits.some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))
+      out.push({ time: t, cls: h.cls, lane: h.lane, vel: 'sf', levelDb: (h.levelDb || 0) - 10, ghost: true });
+  }
+  return out;
+}
+async function transcribeRegion(o, a, b) {
+  crumb('transcribing');
+  await loadAdtof(o, 'models/adtof.onnx');
+  const s0 = Math.floor(a * SR), s1 = Math.min(S.drumMono.length, Math.floor(b * SR));
+  const mono = S.drumMono.subarray(s0, s1);
+  const spec = logSpec(mono);
+  const { act, frames } = await activations(o, mono, spec);
+  const hits = hitsFrom(act, frames).map(h => ({ ...h, time: h.time + s0 / SR }));
+  describeHits(hits, spec.data, spec.frames, Math.round(s0 / SR * FPS));
+  // per-drum level jumps (band spectral flux): finds quiet second strokes the transcriber misses
+  const flux = new Float32Array(spec.frames * 5);
+  CLASSES.forEach((cls, c) => {
+    const bands = FLUX_BANDS[cls];
+    for (let f = 1; f < spec.frames; f++) { let v = 0; for (const k of bands) { const d = spec.data[f * NBANDS + k] - spec.data[(f - 1) * NBANDS + k]; if (d > 0) v += d; } flux[f * 5 + c] = v; }
+  });
+  S.flux = (S.flux || []).filter(r => r.a !== a).concat([{ a, b, f0: Math.round(s0 / SR * FPS), frames: spec.frames, data: flux }]);
+  S.hits = S.hits.filter(h => h.time < a || h.time >= b).concat(hits).sort((x, y) => x.time - y.time);
+  log(`Hits in ${a.toFixed(1)}–${b.toFixed(1)} s: ${countBy(hits)}`);
+}
 const countBy = hs => Object.entries(hs.reduce((m, h) => ((m[h.cls] = (m[h.cls] || 0) + 1), m), {})).map(([k, v]) => `${k} ${v}`).join(', ');
 
 /** (Re)build patterns for marked bars that have drums. force: also rebuild edited ones. */
@@ -690,10 +724,16 @@ function buildPatterns(force) {
   if (!bars.length) return;
   assignLanes(S.hits, bars);
   S.swing = detectSwing(S.hits, bars);
+  const extra = doubleStrokes(bars);   // quiet second strokes of doubles
+  const all = S.hits.concat(extra).sort((x, y) => x.time - y.time);
   for (const b of bars) {
     const old = S.patterns.get(b.i);
     if (old && old.edited && !force) continue;
-    S.patterns.set(b.i, { ...barToPattern(S.hits, b, S.swing), edited: false });
+    S.patterns.set(b.i, { ...barToPattern(all, b, S.swing), edited: false });
+    // what was heard in this bar, in steps (for checking against the grid)
+    const inBar = all.filter(h => h.time >= b.start - b.step / 2 && h.time < b.end - b.step / 2)
+      .map(h => `${((h.time - b.start) / b.step).toFixed(2)} ${h.lane}${h.ghost ? '(ghost)' : ''} ${h.vel}`);
+    log(`Bar ${barNo(b.i)} hits [step lane vel]: ` + inBar.join(', '));
   }
   for (const k of [...S.patterns.keys()]) if (!S.marks.includes(k)) S.patterns.delete(k);
   if (force) S.undo = [];
