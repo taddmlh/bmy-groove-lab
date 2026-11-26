@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126q';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126q';
-import { detectGrid, barTimes } from './beats.js?b=20261126q';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126q';
-import { buildBank, bankFileName } from './bank.js?b=20261126q';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126q';
-import { denoise } from './denoise.js?b=20261126q';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126q';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126q';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126q';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126r';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126r';
+import { detectGrid, barTimes } from './beats.js?b=20261126r';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126r';
+import { buildBank, bankFileName } from './bank.js?b=20261126r';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126r';
+import { denoise } from './denoise.js?b=20261126r';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126r';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126r';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126r';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1159,13 +1159,17 @@ function makeBank() {
   return { bank, pats, fname: bankFileName(bank) };
 }
 const b64url = str => { const bytes = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const linkOn = () => { try { return localStorage.getItem('bmyGLLink') === '1'; } catch (e) { return false; } };
+function showLinkMode() { const on = isIOS && linkOn(); $('exportFile').classList.toggle('hidden', !on); $('linkMode').checked = linkOn(); $('linkRow').classList.toggle('hidden', !isIOS); }
+$('linkMode').onchange = () => { try { localStorage.setItem('bmyGLLink', $('linkMode').checked ? '1' : '0'); } catch (e) {} showLinkMode(); };
+showLinkMode();
 $('export').onclick = () => {
-  if (!isIOS) return exportFile();
+  if (!isIOS || !linkOn()) return exportFile();
   try {
     const x = makeBank(); if (!x) return;
     const link = `bmydrummer://import?name=${encodeURIComponent(x.fname.replace(/\.bmybank$/, ''))}#${b64url(JSON.stringify(x.bank))}`;
     log(`Sent "${x.fname}" to BMY by link: ${x.pats.length} patterns, ${x.pats.reduce((n, p) => n + p.cells.length, 0)} cells, link ${(link.length / 1024).toFixed(1)} KB`);
-    status('Opening BMY Drummer… (if nothing happens, BMY doesn’t have the Groove Lab link update yet: use File… instead)');
+    status('Opening BMY Drummer… (if nothing happens, BMY doesn’t have the Groove Lab link update: use File…, or turn the link off in the Log panel)');
     location.href = link;
   } catch (err) { status('Export failed: ' + err.message); log('ERROR ' + errText(err)); }
 };
@@ -1525,7 +1529,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26q';
+const BUILD = '2026-11-26r';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
