@@ -44,12 +44,13 @@ export function patternEvents(pattern, swing) {
   };
   const ev = [];
   for (const c of pattern.cells) {
+    const kitLane = c.lane === 'closedHat' && pattern.hatUseAlt ? 'ride' : c.lane;
     const lane = c.lane === 'closedHat' && pattern.hatUseAlt ? 'ride' : LANE_VOICE[c.lane];
     if (c.ornament && SPAN[c.ornament]) {
       const span = SPAN[c.ornament], bits = c.tripletPattern || '111';
       const vels = [c.velocity, c.note2Velocity || c.velocity, c.note3Velocity || c.velocity];
-      for (let k = 0; k < 3; k++) if (bits[k] === '1') ev.push({ voice: lane, step: c.step + k * span / 3, vel: vels[k] });
-    } else ev.push({ voice: lane, step: swingStep(c.step), vel: c.velocity });
+      for (let k = 0; k < 3; k++) if (bits[k] === '1') ev.push({ voice: lane, lane: kitLane, step: c.step + k * span / 3, vel: vels[k] });
+    } else ev.push({ voice: lane, lane: kitLane, step: swingStep(c.step), vel: c.velocity });
   }
   return ev;
 }
@@ -67,6 +68,34 @@ export function renderBar(ctx, pattern, swing, bpm) {
   return buf;
 }
 
+// ---- BMY's built-in kit: GeneralUser GS "Standard 1", rendered per BMY velocity label (kit/kit.json)
+const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
+let KIT = null;
+export async function loadKit(ctx, base = 'kit/') {
+  if (KIT) return KIT;
+  const man = await (await fetch(base + 'kit.json')).json();
+  const lanes = {};
+  await Promise.all(Object.entries(man.notes).map(async ([lane, n]) => {
+    const buf = await ctx.decodeAudioData(await (await fetch(base + n.file)).arrayBuffer());
+    const data = buf.getChannelData(0), k = buf.sampleRate / man.sr;
+    lanes[lane] = { excl: n.exclusiveClass, layers: n.layers.map(([o, l]) => data.subarray(Math.round(o * k), Math.round((o + l) * k))) };
+  }));
+  KIT = { name: man.kit, lanes };
+  return KIT;
+}
+export const kitLoaded = () => !!KIT;
+const KIT_LANE = { closedHat: 'closedHat', openHat: 'openHat', snare: 'snare', snareAlt: 'snareAlt', kick: 'kick', crash: 'crash',
+  tomHigh: 'tomHigh', tomMid: 'tomMid', tomFloor: 'tomFloor', oneShotA: 'oneShotA', oneShotB: 'oneShotB', oneShotC: 'oneShotC', ride: 'ride' };
+
+/** Sample + choke class for one event (BMY kit if loaded, else the tiny synth). */
+function sound(e) {
+  if (KIT) {
+    const k = KIT.lanes[KIT_LANE[e.lane]];
+    if (k) { const li = Math.max(0, VELS.indexOf(e.vel)); return { data: k.layers[li < 0 ? 3 : li], gain: 1, excl: k.excl }; }
+  }
+  return { data: voice(e.voice), gain: (VEL_MIDI[e.vel] || 82) / 127, excl: e.voice === 'hat' || e.voice === 'ohat' ? 1 : 0 };
+}
+
 /**
  * Region [a, b) of the song as an AudioBuffer: each item {start, stepSec, pattern} is a bar whose
  * pattern plays at its place in the song. Used to hear patterns in parallel with the song and stem.
@@ -75,11 +104,22 @@ export function renderRegion(ctx, a, b, items, swing) {
   const len = Math.max(1, Math.round((b - a) * SR));
   const buf = ctx.createBuffer(2, len, SR);
   const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  const evs = [];
   for (const it of items) for (const e of patternEvents(it.pattern, swing)) {
     const t = it.start + e.step * it.stepSec - a;
     if (t < -0.01 || t >= b - a) continue;
-    const v = voice(e.voice), g = (VEL_MIDI[e.vel] || 82) / 127, s0 = Math.round(t * SR);
-    for (let i = 0; i < v.length; i++) { const j = s0 + i; if (j >= 0 && j < len) { L[j] += v[i] * g; R[j] += v[i] * g; } }
+    evs.push({ s0: Math.round(t * SR), ...sound(e) });
   }
+  evs.sort((x, y) => x.s0 - y.s0);
+  const FADE = 300;                                          // ~7 ms choke fade
+  evs.forEach((e, k) => {
+    let n = e.data.length;
+    if (e.excl) { const nx = evs.slice(k + 1).find(o => o.excl === e.excl); if (nx) n = Math.min(n, nx.s0 - e.s0 + FADE); }
+    for (let i = 0; i < n; i++) {
+      const j = e.s0 + i; if (j < 0) continue; if (j >= len) break;
+      const f = e.excl && n < e.data.length && i > n - FADE ? (n - i) / FADE : 1;
+      const v = e.data[i] * e.gain * f; L[j] += v; R[j] += v;
+    }
+  });
   return buf;
 }

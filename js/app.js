@@ -5,7 +5,7 @@ import { detectGrid, barTimes } from './beats.js';
 import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js';
 import { buildBank, bankFileName } from './bank.js';
 import { loadDemucs, separateDrums } from './demucs.js';
-import { renderRegion } from './synth.js';
+import { renderRegion, loadKit } from './synth.js';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -751,5 +751,6 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 
 // ---------------------------------------------------------------- start
 log('Groove Lab loaded (v1)');
+loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
 updateButtons(); showLock(); renderGrid(); redraw();
