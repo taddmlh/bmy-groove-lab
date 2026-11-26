@@ -50,6 +50,12 @@ export function patternEvents(pattern, swing) {
       const span = SPAN[c.ornament], bits = c.tripletPattern || '111';
       const vels = [c.velocity, c.note2Velocity || c.velocity, c.note3Velocity || c.velocity];
       for (let k = 0; k < 3; k++) if (bits[k] === '1') ev.push({ voice: lane, lane: kitLane, step: c.step + k * span / 3, vel: vels[k] });
+    } else if (c.ornament === 'double') {        // BMY: main x0.85, second stroke half a step later x0.95
+      ev.push({ voice: lane, lane: kitLane, step: swingStep(c.step), vel: c.velocity, scale: 0.85 });
+      ev.push({ voice: lane, lane: kitLane, step: swingStep(c.step) + 0.5, vel: c.velocity, scale: 0.95 });
+    } else if (c.ornament === 'flam') {          // BMY: grace 22 ms before, x0.33
+      ev.push({ voice: lane, lane: kitLane, step: swingStep(c.step), vel: c.velocity });
+      ev.push({ voice: lane, lane: kitLane, step: swingStep(c.step), ms: -22, vel: c.velocity, scale: 0.33 });
     } else ev.push({ voice: lane, lane: kitLane, step: swingStep(c.step), vel: c.velocity });
   }
   return ev;
@@ -97,11 +103,17 @@ const KIT_LANE = { closedHat: 'closedHat', openHat: 'openHat', snare: 'snare', s
 
 /** Sample + choke class for one event (BMY kit if loaded, else the tiny synth). */
 function sound(e) {
+  let vel = e.vel, trim = 1;
+  if (e.scale && e.scale !== 1) {              // scaled stroke: nearest BMY layer, then trim the level
+    const v = (VEL_MIDI[e.vel] || 82) * e.scale;
+    vel = VELS.reduce((b, l) => (Math.abs(VEL_MIDI[l] - v) < Math.abs(VEL_MIDI[b] - v) ? l : b), 'gh');
+    trim = Math.min(1.5, Math.pow(v / VEL_MIDI[vel], 2));
+  }
   if (KIT) {
     const k = KIT.lanes[KIT_LANE[e.lane]];
-    if (k) { const li = Math.max(0, VELS.indexOf(e.vel)); return { data: k.layers[li < 0 ? 3 : li], gain: 1, excl: k.excl }; }
+    if (k) { const li = VELS.indexOf(vel); return { data: k.layers[li < 0 ? 3 : li], gain: trim, excl: k.excl }; }
   }
-  return { data: voice(e.voice), gain: (VEL_MIDI[e.vel] || 82) / 127, excl: e.voice === 'hat' || e.voice === 'ohat' ? 1 : 0 };
+  return { data: voice(e.voice), gain: (VEL_MIDI[vel] || 82) / 127 * trim, excl: e.voice === 'hat' || e.voice === 'ohat' ? 1 : 0 };
 }
 
 /**
@@ -114,7 +126,7 @@ export function renderRegion(ctx, a, b, items, swing) {
   const L = buf.getChannelData(0), R = buf.getChannelData(1);
   const evs = [];
   for (const it of items) for (const e of patternEvents(it.pattern, swing)) {
-    const t = it.start + e.step * it.stepSec - a;
+    const t = it.start + e.step * it.stepSec + (e.ms || 0) / 1000 - a;
     if (t < -0.01 || t >= b - a) continue;
     evs.push({ s0: Math.round(t * SR), ...sound(e) });
   }

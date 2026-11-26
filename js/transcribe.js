@@ -129,6 +129,7 @@ export function detectSwing(hits, bars) {
 
 // ---- one bar -> cells ---------------------------------------------------------------------
 const TRIP4 = [0, 4 / 3, 8 / 3], TRIP8 = [0, 2 / 3, 4 / 3];
+const SPANS = { t4: 4, t8: 2, t16: 1, double: 1, flam: 1 };
 
 /** bar: {start, end, step}. Returns {cells, hatUseAlt, notes:[]}. */
 export function barToPattern(hits, bar, swing) {
@@ -160,7 +161,9 @@ export function barToPattern(hits, bar, swing) {
       const qs = bh.map(h => ({ h, q: h.p - beat * 4 }));
       const unexplained = qs.filter(x => nearest(x.q, grid).d > 0.2);
       // quarter-span triplet (3 over the beat)
-      if (unexplained.length && qs.length >= 2 && qs.every(x => Math.min(...TRIP4.map(t => Math.abs(x.q - t))) < 0.18)) {
+      const d4 = x => Math.min(...TRIP4.map(t => Math.abs(x.q - t)));
+      // a triplet needs 3 notes, or 2 notes sitting almost exactly on triplet positions (else it's more likely a double)
+      if (unexplained.length && (qs.length >= 3 ? qs.every(x => d4(x) < 0.18) : qs.length === 2 && qs.every(x => d4(x) < 0.08))) {
         const slot = [null, null, null];
         qs.forEach(x => { const i = TRIP4.reduce((bi, t, k) => (Math.abs(x.q - t) < Math.abs(x.q - TRIP4[bi]) ? k : bi), 0); if (!slot[i] || velRank(x.h.vel) > velRank(slot[i].vel)) slot[i] = x.h; });
         cells.push(tripCell(lane, beat * 4, 't4', slot));
@@ -170,11 +173,24 @@ export function barToPattern(hits, bar, swing) {
       for (const half of [0, 2]) {
         const hq = qs.filter(x => x.q >= half - 0.25 && x.q < half + 1.75);
         const un = hq.filter(x => nearest(x.q, grid).d > 0.2);
-        if (un.length && hq.length >= 2 && hq.every(x => Math.min(...TRIP8.map(t => Math.abs(x.q - half - t))) < 0.15)) {
+        const d8 = x => Math.min(...TRIP8.map(t => Math.abs(x.q - half - t)));
+        if (un.length && (hq.length >= 3 ? hq.every(x => d8(x) < 0.15) : hq.length === 2 && hq.every(x => d8(x) < 0.06))) {
           const slot = [null, null, null];
           hq.forEach(x => { const i = TRIP8.reduce((bi, t, k) => (Math.abs(x.q - half - t) < Math.abs(x.q - half - TRIP8[bi]) ? k : bi), 0); if (!slot[i] || velRank(x.h.vel) > velRank(slot[i].vel)) slot[i] = x.h; });
           cells.push(tripCell(lane, beat * 4 + half, 't8', slot));
           hq.forEach(x => { x.used = true; });
+        }
+      }
+      // doubles (two strokes a 32nd apart) and flams (soft grace 8-45 ms before the main stroke)
+      const rest = qs.filter(x => !x.used).sort((x, y) => x.q - y.q);
+      for (let k = 0; k + 1 < rest.length; k++) {
+        const x = rest[k], y = rest[k + 1];
+        if (x.used || y.used) continue;
+        const d = y.q - x.q, ms = d * bar.step * 1000;
+        if (ms >= 8 && ms <= 45 && (velRank(x.h.vel) < velRank(y.h.vel) || (x.h.levelDb || 0) < (y.h.levelDb || 0) - 3)) {
+          y.orn = 'flam'; x.used = true;
+        } else if (d >= 0.3 && d <= 0.7 && (nearest(y.q, grid).d > 0.2 || nearest(x.q, grid).i === nearest(y.q, grid).i)) {
+          x.orn = 'double'; x.vel2 = y.h.vel; y.used = true;
         }
       }
       for (const x of qs) {
@@ -182,14 +198,17 @@ export function barToPattern(hits, bar, swing) {
         const n = nearest(x.q, grid);
         const step = beat * 4 + n.i;
         if (step < 0 || step > 15) continue;
-        if (cells.some(c => c.lane === lane && c.ornament && step >= c.step && step < c.step + (c.ornament === 't4' ? 4 : 2))) continue;
-        put({ lane, step, velocity: x.h.vel, tripletPattern: '111' });
+        if (cells.some(c => c.lane === lane && c.ornament && SPANS[c.ornament] > 1 && step >= c.step && step < c.step + SPANS[c.ornament])) continue;
+        const c = { lane, step, velocity: x.h.vel, tripletPattern: '111' };
+        if (x.orn) c.ornament = x.orn;
+        put(c);
       }
     });
     cells.push(...taken.values());
   }
   // drop straight cells covered by a triplet in the same lane
-  const out = cells.filter(c => c.ornament || !cells.some(t => t.ornament && t.lane === c.lane && c.step >= t.step && c.step < t.step + (t.ornament === 't4' ? 4 : 2)));
+  const multi = c => c.ornament === 't4' || c.ornament === 't8';
+  const out = cells.filter(c => multi(c) || !cells.some(t => multi(t) && t.lane === c.lane && c.step >= t.step && c.step < t.step + SPANS[t.ornament]));
   out.sort((a, b) => a.step - b.step || LANES.findIndex(l => l.role === a.lane) - LANES.findIndex(l => l.role === b.lane));
   return { cells: out, hatUseAlt: rideBar ? 1 : 0, notes };
 }

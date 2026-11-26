@@ -745,6 +745,7 @@ function renderGrid() {
     return;
   }
   const g = $('grid'); g.innerHTML = '';
+  const px = { h: 0, w: 0 }, drawers = [];   // notes are sized once all rows are laid out
   const swing = S.swing;
   const shift = s => !swing || swing.type === 'Off' ? 0 : swing.type === '1-8' && s % 4 === 2 ? swing.depth / 100 * 2 / 3 : swing.type === '1-16' && s % 2 === 1 ? swing.depth / 100 / 3 : 0;
   for (const l of LANES) {
@@ -758,12 +759,7 @@ function renderGrid() {
       const cov = trips.some(t => s >= t.step && s < t.step + SPAN[t.ornament]);
       cell.className = 'cell' + (s % 4 === 0 ? ' beat' : '') + (cov ? ' cov' : '');
       const c = p.cells.find(x => x.lane === l.role && x.step === s && !SPAN[x.ornament]);
-      if (c) {
-        const n = document.createElement('div'); n.className = 'note';
-        const z = glyphSize(c.velocity) * 100;
-        n.style.cssText = `height:${z}%;aspect-ratio:1;max-width:${z}%;background:${color};left:${(50 + shift(s) * 100).toFixed(1)}%;top:50%;transform:translate(-50%,-50%)`;
-        cell.appendChild(n);
-      }
+      if (c) cell._note = c;
       cell.onclick = () => editCell(l.role, s);
       row.appendChild(cell);
     }
@@ -776,16 +772,39 @@ function renderGrid() {
         const pos = t.step + 0.5 + k * span / 3;      // centre of the note, in steps
         const d = document.createElement('div'); d.className = 'trip';
         const z = glyphSize(vels[k]);
-        d.style.cssText = `left:calc(46px + (100% - 46px) * ${(pos / 16).toFixed(4)});height:${(z * 70).toFixed(0)}%;aspect-ratio:1;background:${color};box-shadow:0 0 0 1px rgba(255,255,255,.55)`;
+        d.dataset.z = z;
+        d.style.cssText = `left:calc(46px + (100% - 46px) * ${(pos / 16).toFixed(4)});background:${color};box-shadow:0 0 0 1px rgba(255,255,255,.55)`;
         row.appendChild(d);
       }
     }
     g.appendChild(row);
+    drawers.push(() => {
+    const side = Math.max(6, Math.min(px.h, px.w) - 4);
+    const dot = (parent, leftPct, z, extra = '') => {
+      const n = document.createElement('div'); n.className = 'note';
+      const d = Math.round(side * z);
+      n.style.cssText = `width:${d}px;height:${d}px;left:${leftPct.toFixed(1)}%;background:${color};${extra}`;
+      parent.appendChild(n);
+    };
+    [...row.children].slice(1).forEach((cell, s) => {
+      const c = cell._note; if (!c) return;
+      const z = glyphSize(c.velocity), x0 = 50 + shift(s) * 100;
+      if (c.ornament === 'double') { dot(cell, x0 - 18, z * 0.9); dot(cell, x0 + 22, z * 0.8); }
+      else if (c.ornament === 'flam') { dot(cell, x0 - 26, 0.32, 'opacity:.85'); dot(cell, x0 + 6, z); }
+      else dot(cell, x0, z);
+      if (c.ornament && !SPAN[c.ornament]) { const t = document.createElement('span'); t.className = 'orn'; t.textContent = c.ornament === 'double' ? 'Db' : c.ornament === 'flam' ? 'Fl' : c.ornament; cell.appendChild(t); }
+    });
+    // triplet notes, sized in px too
+    row.querySelectorAll('.trip').forEach(d => { const zz = +d.dataset.z; const dd = Math.round(side * zz * 0.8); d.style.width = dd + 'px'; d.style.height = dd + 'px'; });
+    });
   }
+  { const r = g.querySelector('.row .cell').getBoundingClientRect(); px.h = r.height; px.w = r.width; }   // all 12 rows laid out
+  drawers.forEach(f => f());
   $('swType').value = swing.type; $('swDepth').value = swing.depth; $('swDepth').disabled = swing.type === 'Off';
   $('hatRide').checked = !!p.hatUseAlt;
   const tripN = p.cells.filter(c => SPAN[c.ornament]).length;
-  $('patNotes').textContent = [tripN ? `${tripN} triplet${tripN > 1 ? 's' : ''}` : '', ...(p.notes || [])].filter(Boolean).join(' · ');
+  const dbl = p.cells.filter(c => c.ornament === 'double').length, flm = p.cells.filter(c => c.ornament === 'flam').length;
+  $('patNotes').textContent = [tripN ? `${tripN} triplet${tripN > 1 ? 's' : ''}` : '', dbl ? `${dbl} double${dbl > 1 ? 's' : ''}` : '', flm ? `${flm} flam${flm > 1 ? 's' : ''}` : '', ...(p.notes || [])].filter(Boolean).join(' · ');
 }
 function editCell(lane, step) {
   const p = S.patterns.get(S.tab); if (!p) return;
