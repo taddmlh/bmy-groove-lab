@@ -8,6 +8,7 @@ const CPU_NODES = ['/ReduceMean', '/Sub', '/Pow', '/ReduceMean_1', '/Clip', '/Sq
 const TS = 343980, BINS = 2048, FRAMES = 336, STRIDE = Math.floor(TS * 0.75);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+export const SEPARATOR_VERSION = 'lean-2';
 let dw = null, model = null;
 
 const sessOpts = (i, final) => ({
@@ -90,6 +91,7 @@ export async function separateDrums(ort, L, R, onProg = () => {}, onPart = () =>
     const segLen = Math.min(TS, total - start);
     const sl = new Float32Array(TS), sr = new Float32Array(TS);
     sl.set(L.subarray(start, start + segLen)); sr.set(R.subarray(start, start + segLen));
+    onPart(seg + 1, nSeg, 0, model.pieces.length);                          // 'part 0' = preparing the input
     const r = await runSegment(ort, dw.prepareModelInput(sl, sr), (i, n) => onPart(seg + 1, nSeg, i, n));
     const drums = dw.standaloneIspec(dw.standaloneMask(r.freq)[0], TS);   // track 0 = drums
     const ns = r.dims[3];
