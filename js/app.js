@@ -36,7 +36,7 @@ const S = {
 };
 let ort = null, actx = null;
 const TEST_NO_DEMUCS = new URLSearchParams(location.search).has('nodemucs');   // test hook: audio is already drums only
-if (TEST_NO_DEMUCS) window.GL = { S };
+if (TEST_NO_DEMUCS) window.GL = { S, get loop() { return srcNode && [srcNode.loopStart, srcNode.loopEnd]; }, get playing() { return playing; } };
 
 async function getOrt() {
   if (ort) return ort;
@@ -223,27 +223,29 @@ for (const id of ['wMix', 'wDrums']) pointerDrag($(id), {
     if (st.mode === 'start') {          // slide every bar line, tempo unchanged
       const a = Math.max(-barSec(), Math.min(S.dur, xToT(st.x)));
       S.grid.t0 = a; S.sel = { a, b: a + st.n * barSec() };
-      gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; S.playhead = Math.max(0, a); redraw();
+      gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; redraw(); syncPlayback(true);
       status(`Bar start ${a.toFixed(3)} s — release to re-transcribe`);
       return;
     }
     if (st.mode === 'end') {            // stretch: start stays, tempo follows the end
       const b = xToT(st.x), len = Math.max(0.2, b - st.a0) / st.n;
       S.grid.bpm = Math.max(30, Math.min(300, Math.round(240 / len * 100) / 100)); S.grid.t0 = st.a0;
-      gridChanged(null, true); S.sel = { a: st.a0, b: st.a0 + st.n * barSec() }; redraw();
+      gridChanged(null, true); S.sel = { a: st.a0, b: st.a0 + st.n * barSec() }; redraw(); syncPlayback(true);
       status(`${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
       return;
     }
     const a = Math.min(st.t0, xToT(st.x)), b = Math.max(st.t0, xToT(st.x));
     const ba = barAt(a), bb = barAt(b);
     S.sel = ba >= 0 && bb >= 0 ? { a: S.bars[ba].start, b: S.bars[bb].end } : { a: Math.max(0, a), b: Math.min(S.dur, b) };
-    S.playhead = Math.max(0, S.sel.a); redraw();
+    if (!playing) S.playhead = Math.max(0, S.sel.a);
+    redraw();
   },
   up: st => {
     if (S.grid && st.moved && (st.mode === 'start' || st.mode === 'end')) {
       gridChanged(st.mode === 'start' ? 'Bar lines moved. Drag the right edge to set the tempo.' : `Tempo set to ${S.grid.bpm.toFixed(2)} BPM.`);
       return;
     }
+    if (S.grid && st.moved) { syncPlayback(); return; }
     if (!S.grid || st.moved) return;
     const t = xToT(st.x), i = barAt(t);
     S.playhead = Math.max(0, Math.min(S.dur, t));
@@ -285,6 +287,7 @@ function afterMarksChanged() {
   if (S.hits.length) buildPatterns(false);
   if (S.tab === null || !S.marks.includes(S.tab)) S.tab = S.marks.find(i => S.patterns.has(i)) ?? S.marks[0] ?? null;
   updateButtons(); renderTabs(); renderGrid(); redraw();
+  syncPlayback();
 }
 $('markSel').onclick = () => {
   if (!S.sel) return;
@@ -360,7 +363,7 @@ function gridChanged(note, live) {
   S.marks = [...new Set(markT.map(barAt).filter(i => i >= 0))].sort((a, b) => a - b);
   S.tab = tabT === null ? null : barAt(tabT);
   if (selT) { const a = barAt(selT[0]), b = barAt(selT[1]); if (a >= 0 && b >= 0) S.sel = { a: S.bars[a].start, b: S.bars[b].end }; }
-  if (live) { redraw(); return; }
+  if (live) { redraw(); syncPlayback(true); return; }
   if (S.hits.length) { S.patterns = new Map(); buildPatterns(true); if (note) status(note); }
   else if (note) status(note);
   afterMarksChanged();
@@ -549,19 +552,31 @@ function editCell(lane, step) {
   else if (hit) p.cells.splice(p.cells.indexOf(hit), 1);
   else p.cells.push({ lane, step, velocity: 'n2', tripletPattern: '111' });
   p.edited = true;
-  updateButtons(); renderGrid(); if (playing && S.src === 'pattern') startPlay();
+  updateButtons(); renderGrid(); syncPlayback();
 }
 $('undo').onclick = () => {
   const u = S.undo.pop(); if (!u) return;
   const p = S.patterns.get(u.bar); if (p) { p.cells = u.cells; p.hatUseAlt = u.hatUseAlt; }
-  S.tab = u.bar; updateButtons(); renderTabs(); renderGrid();
+  S.tab = u.bar; updateButtons(); renderTabs(); renderGrid(); syncPlayback();
 };
-$('swType').onchange = () => { S.swing = { type: $('swType').value, depth: $('swType').value === 'Off' ? 0 : (+$('swDepth').value || 50) }; renderGrid(); if (playing && S.src === 'pattern') startPlay(); };
-$('swDepth').onchange = () => { S.swing.depth = Math.max(0, Math.min(100, Math.round(+$('swDepth').value || 0))); renderGrid(); if (playing && S.src === 'pattern') startPlay(); };
-$('hatRide').onchange = () => { const p = S.patterns.get(S.tab); if (!p) return; p.hatUseAlt = $('hatRide').checked ? 1 : 0; p.edited = true; renderGrid(); };
+$('swType').onchange = () => { S.swing = { type: $('swType').value, depth: $('swType').value === 'Off' ? 0 : (+$('swDepth').value || 50) }; renderGrid(); syncPlayback(); };
+$('swDepth').onchange = () => { S.swing.depth = Math.max(0, Math.min(100, Math.round(+$('swDepth').value || 0))); renderGrid(); syncPlayback(); };
+$('hatRide').onchange = () => { const p = S.patterns.get(S.tab); if (!p) return; p.hatUseAlt = $('hatRide').checked ? 1 : 0; p.edited = true; renderGrid(); syncPlayback(); };
 
 // ---------------------------------------------------------------- playback
 let playing = false, srcNode = null, playT0 = 0, playA = 0, playLen = 0, raf = 0;
+let posNow = 0, lastCtxT = 0, loopA = 0, loopB = 0;   // song-time position of the playing source and its loop
+/** Make what's playing follow the current selection, bar lines, swing and pattern. */
+function syncPlayback(live) {
+  if (!playing || !srcNode) return;
+  if (live && S.src === 'pattern') return;   // re-render the pattern once, on release
+  if (S.src === 'pattern' || !S.loop) { startPlay(); return; }
+  if (!S.sel) return;
+  const a = Math.max(0, S.sel.a), b = Math.min(S.dur, S.sel.b);
+  if (b - a < 0.05) return;
+  if (posNow < a - 0.01 || posNow >= b) { startPlay(); return; }
+  srcNode.loopStart = a; srcNode.loopEnd = b; loopA = a; loopB = b;
+}
 document.querySelectorAll('#srcSeg button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#srcSeg button').forEach(x => x.classList.toggle('on', x === b));
   S.src = b.dataset.src; if (playing) startPlay();
@@ -593,14 +608,17 @@ function startPlay() {
   srcNode.loop = S.loop; srcNode.loopStart = a; srcNode.loopEnd = b;
   srcNode.onended = () => { if (playing && !S.loop) stopPlay(); };
   playT0 = ctx.currentTime + 0.03; playLen = b - a;
+  posNow = a; lastCtxT = playT0; loopA = a; loopB = b;
   if (S.loop) srcNode.start(playT0, a); else srcNode.start(playT0, a, b - a);
   playing = true; $('play').textContent = '■ Stop';
   cancelAnimationFrame(raf);
   const tick = () => {
     if (!playing) return;
-    let el = ctx.currentTime - playT0; if (el < 0) el = 0;
-    const pos = S.loop ? el % playLen : Math.min(el, playLen);
-    S.playhead = playA + pos * (S.src === 'pattern' ? barSec() / playLen : 1);
+    const now = ctx.currentTime;
+    if (now > lastCtxT) { posNow += now - lastCtxT; lastCtxT = now; }
+    if (S.loop && posNow >= loopB) posNow = loopA + ((posNow - loopB) % (loopB - loopA));
+    if (!S.loop) posNow = Math.min(posNow, loopB);
+    S.playhead = S.src === 'pattern' ? playA + (posNow - loopA) * barSec() / (loopB - loopA) : posNow;
     drawRuler(); drawWave($('wMix'), S.mixMono, '#9aa3b5'); drawWave($('wDrums'), S.drumMono, '#ec8a2c', S.extracted);
     raf = requestAnimationFrame(tick);
   };
