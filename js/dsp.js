@@ -20,7 +20,7 @@ const bitrev = new Uint16Array(NFFT);
 const cosT = new Float64Array(HALF), sinT = new Float64Array(HALF);
 for (let i = 0; i < HALF; i++) { cosT[i] = Math.cos(-2 * Math.PI * i / NFFT); sinT[i] = Math.sin(-2 * Math.PI * i / NFFT); }
 
-function fft(re, im) {
+export function fft(re, im) {
   for (let i = 0; i < NFFT; i++) {
     const j = bitrev[i];
     if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
