@@ -64,6 +64,7 @@ const barAt = t => S.bars.findIndex(b => t >= b.start && t < b.end);
 const barNo = i => { const first = S.bars.findIndex(b => b.start >= -0.1); return i - first + 1; };   // first bar line in the song = bar 1 (a pickup is bar 0)
 
 // ---------------------------------------------------------------- waveforms
+const waveW = () => $('wMix').getBoundingClientRect().width || Math.max(300, $('detail').getBoundingClientRect().width || window.innerWidth - 16);
 function canvasSize(c) {
   const dpr = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
   const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
@@ -192,7 +193,7 @@ function selLabel() {
   return (a >= 0 && b >= 0 ? (a === b ? `Bar ${barNo(a)}` : `Bars ${barNo(a)}–${barNo(b)}`) + ' · ' : '') + `${fmt(S.sel.a)}–${fmt(S.sel.b)}`;
 }
 function clampView() {
-  const vw = $('wMix').getBoundingClientRect().width / S.view.pps;
+  const vw = waveW() / S.view.pps;
   S.view.start = Math.max(-0.5, Math.min(S.view.start, S.dur - vw + 0.5));
 }
 window.addEventListener('resize', () => { S.ovPeaks = null; redraw(); renderGrid(); });
@@ -322,12 +323,12 @@ pointerDrag($('overview'), {
 });
 function moveOv(st) {
   if (!S.dur) return;
-  const vw = $('wMix').getBoundingClientRect().width / S.view.pps;
+  const vw = waveW() / S.view.pps;
   S.view.start = st.x / st.r.width * S.dur - vw / 2; clampView(); redraw();
 }
 function zoom(f) {
   if (!S.dur) return;
-  const w = $('wMix').getBoundingClientRect().width, centre = S.view.start + w / S.view.pps / 2;
+  const w = waveW(), centre = S.view.start + w / S.view.pps / 2;
   S.view.pps = Math.max(4, Math.min(800, S.view.pps * f));
   S.view.start = centre - w / S.view.pps / 2; clampView(); redraw();
 }
@@ -378,6 +379,7 @@ $('file').addEventListener('change', async e => {
 });
 /** Decode, then restore saved work for this song or analyse it fresh. */
 async function openSong({ key, name, bytes, type, buf }) {
+  phoneTab("song");
   stopPlay(); closeRecent();
   try {
     busy = true; updateButtons();
@@ -402,7 +404,7 @@ async function openSong({ key, name, bytes, type, buf }) {
       S.grid = detectGrid(S.mixSpec.data, S.mixSpec.frames); S.mixSpec = null;
       log(`Tempo ${S.grid.bpm} BPM, first bar line at ${S.grid.t0.toFixed(3)} s`);
       rebuildBars();
-      { const w = $('wMix').getBoundingClientRect().width; S.view.pps = Math.max(8, w / (barSec() * Math.max(3, Math.min(12, w / 110)))); }   // ~12 bars on iPad, ~3-4 on a phone
+      { const w = waveW(); S.view.pps = Math.max(8, w / (barSec() * Math.max(3, Math.min(12, w / 110)))); }   // ~12 bars on iPad, ~3-4 on a phone
       S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
       status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
     }
@@ -561,7 +563,7 @@ async function stopRecording() {
   const r = rec; rec = null; if (!r) return;
   try { r.node.port.postMessage('stop'); } catch (e) {}
   r.src.disconnect(); r.node.disconnect(); r.mute.disconnect(); r.stream.getTracks().forEach(t => t.stop());
-  $('rec').classList.remove('on'); $('rec').textContent = '● Record'; $('recMeter').classList.add('hidden');
+  $('rec').classList.remove('on'); $('rec').textContent = phoneMQ.matches ? '● Rec' : '● Record'; $('recMeter').classList.add('hidden');
   if (r.frames < SR * 0.5) { status('Recording too short.'); return; }
   const ctx = audioCtx(), buf = ctx.createBuffer(2, r.frames, SR);
   for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); let o = 0; for (const ch of r.chunks[c]) { d.set(ch, o); o += ch.length; } }
@@ -684,7 +686,7 @@ $('extract').onclick = async () => {
     }
     buildPatterns(!todo.length);
     S.tab = S.marks.find(i => S.patterns.has(i)) ?? null;
-    crumbDone();
+    crumbDone(); phoneTab('pattern');
     status(`Done. Swing ${S.swing.type === 'Off' ? 'off' : S.swing.type + ' ' + S.swing.depth + '%'}. Check each pattern (turn on Drums and Pattern to hear them together), then Export to BMY.`, 1);
   } catch (err) {
     crumbDone(); status('Extraction failed: ' + err.message); log('ERROR ' + (err.stack || err));
@@ -771,7 +773,7 @@ function renderTabs() {
   });
 }
 function ensureVisible(a, b) {
-  const vw = $('wMix').getBoundingClientRect().width / S.view.pps;
+  const vw = waveW() / S.view.pps;
   if (a < S.view.start || b > S.view.start + vw) { S.view.start = a - (vw - (b - a)) / 2; clampView(); }
 }
 const SPAN = { t4: 4, t8: 2, t16: 1 };
@@ -1220,7 +1222,7 @@ async function buildPerformSong() {
   S.hits = P.takes.flatMap(t => t.hits).map(h => ({ time: lead + h.pos * step, cls: 'perform', lane: h.lane, fixedLane: true, levelDb: h.levelDb, strength: 1 })).sort((a, b) => a.time - b.time);
   S.patterns = new Map(); buildPatterns(true);
   S.tab = S.marks[0] ?? null; S.sel = S.marks.length ? { a: S.bars[S.marks[0]].start, b: S.bars[S.marks[S.marks.length - 1]].end } : null;
-  S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (bar * P.bars + 1)); S.view.start = 0;
+  S.view.pps = Math.max(8, waveW() / (bar * P.bars + 1)); S.view.start = 0;
   $('songTitle').textContent = S.name; $('bankName').value = S.name; setBpmField();
   S.perf = { bpm: P.bpm, bars: P.bars, takes: P.takes.map(t => ({ id: t.id, lanes: t.lanes, hits: t.hits })) };
   updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); showPerf();
@@ -1228,6 +1230,27 @@ async function buildPerformSong() {
   try { await putStems({ key: S.key, regions: [], perfTakes: P.takes.filter(t => t.audio).map(t => ({ id: t.id, audio: t.audio })), perfBase: P.base || null }); } catch (e) {}
   saveNow();
 }
+
+// ---------------------------------------------------------------- phone screens (Song / Pattern / Perform)
+const phoneMQ = matchMedia('(max-width:700px), (max-height:500px)');
+function setTab(t) {
+  const app = $('app'), cur = app.dataset.tab || 'song';
+  if (cur === 'perform' && t !== 'perform' && P.rec) return;          // finish the take first
+  app.dataset.tab = t;
+  document.querySelectorAll('#phoneTabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
+  if (phoneMQ.matches) {
+    const open = !$('perf').classList.contains('hidden');
+    if (t === 'perform' && !open) $('perfBtn').click();
+    if (t !== 'perform' && open) $('perfBtn').click();
+  }
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+}
+const phoneTab = t => { if (phoneMQ.matches) setTab(t); };
+document.querySelectorAll('#phoneTabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+$('app').dataset.tab = 'song';
+if (phoneMQ.matches) $('rec').textContent = '● Rec';
+$('status').onclick = () => $('status').classList.toggle('open');
+setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
 log('Groove Lab loaded (v1)');

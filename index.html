@@ -93,32 +93,100 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
 @media (max-width:1500px){.hide-narrow{display:none}}
 @media (max-width:820px){.title{max-width:44vw}}
 @media (prefers-reduced-motion:reduce){.prog>i{transition:none}}
-/* ---- phone layout (iPhone portrait / landscape): page scrolls, grid keeps a tappable size and scrolls sideways */
+.tools{display:contents}
+.grp{display:inline-flex;align-items:center;gap:5px;flex:none}
+.phonetabs{display:none}
+/* ---- phone layout (iPhone): one screen per job, chosen by the tabs along the bottom (Song / Pattern / Perform). */
 @media (max-width:700px), (max-height:500px) {
-  html,body{height:auto}
-  body{overflow:auto;font-size:14px}
-  #app{height:auto;min-height:100%}
-  .top{padding:6px 6px 4px;gap:5px}
-  .bottom{padding:4px 6px 10px;gap:5px;flex:none}
-  .bar{gap:4px}
-  button,.btn{min-height:38px;min-width:36px;padding:0 8px;font-size:14px;border-radius:9px}
-  input[type=number]{width:74px}
-  .title{order:-1;flex:1 1 100%;max-width:none;font-size:16px}
-  .bpmlabel{display:none}
-  #ruler{height:28px}
-  #wMix,#wDrums{height:58px}
-  .mixer{width:100%}
-  .ch{flex:1 1 30%}
-  .ch button{min-width:56px;padding:0 6px}
-  .ch input[type=range]{width:100%;min-width:40px}
-  #status{white-space:normal}
-  #gridWrap{flex:none;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:6px 6px 6px 2px}
-  #grid{flex:none;min-width:620px;height:calc(12 * 30px + 11 * 3px)}
-  .gridinfo{min-width:0}
+  html,body{height:100%}
+  body{font-size:14px}
+  #app{height:100dvh}
+  button,.btn{min-height:38px;min-width:36px;padding:0 9px;font-size:14px;border-radius:9px}
+  .bar{gap:5px}
+  .top{flex:1 1 auto;min-height:0;padding:6px 8px 4px;gap:6px;border-bottom:0}
+  .bottom{padding:4px 8px 6px}
+  /* header: title + Open / Recent / Record on one line, on every screen */
+  .head{flex-wrap:wrap}
+  .title{order:-1;flex:1 1 0;max-width:none;font-size:16px}
+  #perfBtn,.bpmlabel,#selText{display:none}
+  /* tempo tools: one strip that scrolls sideways */
+  .tools{display:flex;flex:1 1 100%;gap:5px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px}
+  .tools::-webkit-scrollbar{display:none}
+  .tools>*{flex:none}
+  input[type=number]{width:72px}
+  #overview{height:30px}
+  #detail{flex:1 1 auto;min-height:150px;display:flex;flex-direction:column}
+  #detail>div{flex:1 1 0;min-height:0}
+  #ruler{height:30px;flex:none}
+  #wMix,#wDrums{height:100%}
+  .transport{gap:6px}
+  .mixer{display:flex;width:100%;flex-wrap:nowrap}
+  .ch{flex:1 1 0}
+  .ch button{min-width:0;padding:0 7px;font-size:13px}
+  .ch input[type=range]{width:100%;min-width:30px}
+  #play{min-width:84px}
+  .transport .grow{display:none}
+  #extract{margin-left:auto}
+  #status{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;font-size:12.5px;line-height:1.35;min-height:34px}
+  #status.open{display:block}
+  /* pattern screen */
+  #gridWrap{padding:6px 4px}
+  #grid{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .row{min-width:560px;grid-template-columns:40px repeat(16,minmax(0,1fr))}
+  .row>:first-child{position:sticky;left:0;z-index:3;background:#000}
   .gridinfo>span:last-child{display:none}
-  .recent,.perf{position:fixed;left:2vw;right:2vw;top:calc(env(safe-area-inset-top) + 8px);width:auto;max-height:84vh}
-  details[open]>div{left:2vw;right:2vw;width:auto;bottom:calc(env(safe-area-inset-bottom) + 8px);max-height:70vh}
-  #bankName{flex:1 1 140px}
+  #bankName{flex:1 1 120px;max-width:none}
+  /* which screen shows */
+  #app:not([data-tab=pattern]) .bottom{display:none}
+  #app[data-tab=pattern] .top>:not(.head),#app[data-tab=perform] .top>:not(.head),
+  #app:not([data-tab=song]) .tools{display:none}
+  #app:not([data-tab=song]) .top{flex:none}
+  #app[data-tab=pattern] .bottom{flex:1 1 auto}
+  /* Perform: a full screen, not a pop-over */
+  .perf{order:1;position:static;flex:1 1 auto;width:auto;max-height:none;margin:0 8px;border-radius:12px;box-shadow:none;overflow:auto}
+  #app:not([data-tab=perform]) .perf{display:none}
+  #app[data-tab=perform] .perf{display:flex;flex-direction:column}
+  .perf h3{font-size:14px}
+  .perf .bar{gap:8px 10px}
+  .perf input[type=range]{flex:1 1 auto}
+  .perf .grp:last-child{flex:1 1 auto}
+  .precbar{margin-top:auto!important;padding-top:10px}
+  .precbar .grow{display:none}
+  #pRec{flex:1 1 100%;min-height:72px;font-size:19px;order:-1}
+  #pUndo,#pClear{flex:1 1 0}
+  .perf .precbar .grp{flex:1 1 100%;justify-content:center}
+  .recent:not(.perf){position:fixed;left:2vw;right:2vw;top:calc(env(safe-area-inset-top) + 50px);width:auto;max-height:70vh}
+  details[open]>div{left:2vw;right:2vw;width:auto;bottom:calc(env(safe-area-inset-bottom) + 130px);max-height:60vh}
+  /* tab bar; in Safari leave room for its floating toolbar */
+  .phonetabs{order:2;display:flex;flex:none;gap:6px;padding:6px 8px calc(env(safe-area-inset-bottom) + 52px);border-top:1px solid var(--line);background:#07080a}
+  .phonetabs button{flex:1 1 0;min-height:48px;flex-direction:column;gap:0;font-size:12px;border:0;background:transparent;color:var(--dim);position:relative}
+  .phonetabs b{font-size:18px;line-height:1.1;font-weight:400}
+  .phonetabs button[aria-selected=true]{color:var(--acc);background:#15171d}
+  .phonetabs i{position:absolute;top:4px;right:calc(50% - 30px);font-style:normal;font-size:11px;background:var(--markEdge);color:#000;border-radius:8px;padding:0 5px;font-weight:600}
+  .phonetabs i:empty{display:none}
+  body{padding-bottom:0}
+}
+@media ((max-width:700px), (max-height:500px)) and (display-mode:standalone){
+  .phonetabs{padding-bottom:calc(env(safe-area-inset-bottom) + 4px)}
+}
+@media (max-height:500px){
+  /* landscape phone: tabs sit top-right, header and tempo tools share one line */
+  .phonetabs{position:fixed;z-index:15;top:calc(env(safe-area-inset-top) + 6px);right:calc(env(safe-area-inset-right) + 8px);padding:0;border:0;background:none;gap:4px}
+  .phonetabs button{min-height:38px;flex:none;width:86px;flex-direction:row;gap:5px;background:var(--panel2);border:1px solid var(--line)}
+  .phonetabs b{font-size:13px}
+  .phonetabs i{top:-6px;right:-4px}
+  .head>.grow{flex:0 0 268px}
+  .title{flex:0 1 auto;max-width:30vw}
+  #grid{overflow:auto}
+  .row{flex:none;height:28px}
+  #detail{min-height:110px}
+  .mixer{width:auto;flex:1 1 280px}
+  #zoomOut,#zoomIn{display:none}
+  #extract{margin-left:0}
+  #status{-webkit-line-clamp:1;line-clamp:1;min-height:17px}
+  .perf{margin-top:2px}
+  #pRec{min-height:48px;flex:2 1 0;order:0}
+  .perf .precbar .grp{flex:none}
 }
 </style>
 </head>
@@ -128,35 +196,36 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
   <div id="perf" class="recent perf hidden" role="dialog" aria-label="Perform">
     <h3>Perform: clap, tap or beatbox over a click</h3>
     <div class="bar">
-      <span class="label">Tempo</span><input id="pBpm" type="number" min="40" max="240" step="0.1" value="100">
-      <button id="pTap">Tap</button><button id="pListen" title="Clap quarter notes for a few seconds">Listen</button>
-      <span class="label">Bars</span><span class="seg" id="pBars"><button data-n="1">1</button><button data-n="2" class="on">2</button><button data-n="4">4</button></span>
-      <button id="pClickBtn" title="Start or stop the click">▶︎ Click</button><input id="pClick" type="range" min="0" max="100" value="70" style="width:90px;accent-color:var(--acc)">
+      <span class="grp"><span class="label">Tempo</span><input id="pBpm" type="number" min="40" max="240" step="0.1" value="100"></span>
+      <span class="grp"><button id="pTap">Tap</button><button id="pListen" title="Clap quarter notes for a few seconds">Listen</button></span>
+      <span class="grp"><span class="label">Bars</span><span class="seg" id="pBars"><button data-n="1">1</button><button data-n="2" class="on">2</button><button data-n="4">4</button></span></span>
+      <span class="grp"><button id="pClickBtn" title="Start or stop the click">▶︎ Click</button><input id="pClick" type="range" min="0" max="100" value="70" style="width:90px;accent-color:var(--acc)" aria-label="Click volume"></span>
     </div>
     <div class="bar" style="margin-top:8px">
       <span class="seg" id="pMode"><button data-m="lane" class="on">Into lane</button><button data-m="beatbox">Beatbox</button></span>
       <select id="pLane" aria-label="Lane"></select>
       <span id="pTeachBox" class="hidden"><span id="pSounds"></span></span>
     </div>
-    <div class="bar" style="margin-top:8px">
+    <div id="pStatus" class="foot">Headphones give the cleanest takes; with the speaker, the click is measured and ignored.</div>
+    <div class="bar precbar" style="margin-top:8px">
       <button id="pRec" class="primary" style="min-width:130px">● Record take</button>
       <button id="pUndo" disabled>Undo layer</button><button id="pClear" disabled>Clear</button>
       <span class="grow"></span>
-      <span class="label">Latency</span><button id="pLatDn">−</button><span id="pLat" class="label" style="min-width:86px;text-align:center"></span><button id="pLatUp">+</button>
+      <span class="grp"><span class="label">Latency</span><button id="pLatDn">−</button><span id="pLat" class="label" style="min-width:86px;text-align:center"></span><button id="pLatUp">+</button></span>
     </div>
-    <div id="pStatus" class="foot">Headphones give the cleanest takes; with the speaker, the click is measured and ignored.</div>
   </div>
   <section class="top">
-    <div class="bar">
+    <div class="bar head">
       <label class="btn primary" for="file">Open</label>
       <input id="file" type="file" accept="audio/*,.mp3,.m4a,.wav,.aif,.aiff,.flac,.caf" hidden>
       <button id="recentBtn" aria-expanded="false">Recent</button>
-      <button id="rec" title="Record from the iPad's audio input">● Record</button>
+      <button id="rec" title="Record from the audio input">● Record</button>
       <button id="perfBtn" aria-expanded="false" title="Clap, tap or beatbox over a click">Perform</button>
       <span id="recMeter" class="meter hidden"><i></i></span>
       <select id="inputSel" class="hidden" aria-label="Audio input"></select>
       <span id="songTitle" class="title"></span>
       <span class="grow"></span>
+      <span id="tempoTools" class="tools">
       <span class="label bpmlabel">BPM</span>
       <span class="tempo"><button id="bpmDn" title="Tempo down 0.1">−</button>
       <input id="bpm" type="number" step="0.01" min="40" max="300" inputmode="decimal">
@@ -167,6 +236,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
       <span class="seg"><button id="nudgeL" title="Bar lines 10 ms earlier">◀︎</button><button id="nudgeR" title="Bar lines 10 ms later">▶︎</button></span>
       <button id="barHere" title="Put a bar line at the playhead">Bar 1 here</button>
       <button id="lock" aria-pressed="false" title="Lock the tempo and bar lines">Lock</button>
+      </span>
     </div>
     <canvas id="overview" aria-label="Whole song: tap or drag to move the view"></canvas>
     <div id="detail">
@@ -174,7 +244,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
       <div style="position:relative"><canvas id="wMix"></canvas><span class="tracklabel" style="top:4px">Song</span></div>
       <div style="position:relative"><canvas id="wDrums"></canvas><span class="tracklabel" style="top:4px">Drums</span></div>
     </div>
-    <div class="bar">
+    <div class="bar transport">
       <div class="mixer" role="group" aria-label="Mixer">
         <span class="ch"><button id="ch-mix" aria-pressed="true">Song</button><input id="vol-mix" type="range" min="0" max="100" aria-label="Song volume"></span>
         <span class="ch"><button id="ch-drums" aria-pressed="false">Drums</button><input id="vol-drums" type="range" min="0" max="100" aria-label="Drums volume"></span>
@@ -218,6 +288,11 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
       <details id="logBox"><summary>Log</summary><div><pre id="log"></pre><div class="bar"><button id="copyLog">Copy log</button><button id="saveStem">Save drum stem</button><span class="grow"></span><a href="speedtest.html" style="color:var(--dim)">Speed test</a><button id="closeLog">Close</button></div></div></details>
     </div>
   </section>
+  <nav id="phoneTabs" class="phonetabs" aria-label="Screens">
+    <button data-tab="song" aria-selected="true"><b>〰︎</b>Song</button>
+    <button data-tab="pattern" aria-selected="false"><b>▦</b>Pattern<i id="tabCount"></i></button>
+    <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
+  </nav>
 </div>
 <script type="module" src="js/app.js"></script>
 </body>
