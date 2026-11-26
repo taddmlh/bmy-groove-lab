@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126s';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126t';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
@@ -35,12 +35,27 @@ function meanEnergy(spec, frames, f0, f1, bands) { let s = 0, n = 0; for (let f 
 
 /** Adds features to each hit: level (dB), decay ratios, tom pitch. specFrame0 = song frame of spec[0]. */
 export function describeHits(hits, spec, frames, specFrame0) {
+  const hats = hits.filter(x => x.cls === 'hihat').sort((a, b) => a.time - b.time);
   for (const h of hits) {
     const f = Math.round(h.time * FPS) - specFrame0;
     const bands = B[h.cls];
     const pk = peakEnergy(spec, frames, f, bands) + 1e-9;
     h.levelDb = 20 * Math.log10(pk);
-    if (h.cls === 'hihat') h.decay = meanEnergy(spec, frames, f + 12, f + 20, B.hihat) / pk;
+    if (h.cls === 'hihat') {
+      // open or closed = how long it rings. Fast hats (e.g. triplets) are hit again before the usual
+      // 120-200 ms window: then measure only up to the next hat, with a stricter bar (it's earlier in the ring).
+      // stop at the next hat (listed, or a re-attack seen in the hat bands, e.g. a quiet hit the transcriber skipped)
+      const next = hats.find(x => x.time > h.time + 0.02);
+      let gapF = next ? Math.round((next.time - h.time) * FPS) : 999;
+      for (let k = 4; k < Math.min(gapF, 22); k++) {
+        const e0 = energy(spec, frames, f + k - 1, B.hihat), e1 = energy(spec, frames, f + k, B.hihat);
+        if (e1 > 1.6 * e0 && e1 > 0.15 * pk) { gapF = k; break; }
+      }
+      if (gapF > 21) h.decay = meanEnergy(spec, frames, f + 12, f + 20, B.hihat) / pk;
+      else if (gapF - 2 > 7) h.decay = meanEnergy(spec, frames, f + 6, f + gapF - 2, B.hihat) / pk * (0.2 / 0.4);
+      else h.decay = 0;                                     // re-hit within 90 ms: a closed hat
+      if (hits.some(x => x.cls === 'snare' && Math.abs(x.time - h.time) < 0.03)) h.decay *= 0.5;   // a snare's ring sits in the hat bands too
+    }
     if (h.cls === 'cymbal') h.decay = meanEnergy(spec, frames, f + 30, f + 45, B.cymbal) / pk;
     if (h.cls === 'tom') {
       let best = 0, bv = -1;

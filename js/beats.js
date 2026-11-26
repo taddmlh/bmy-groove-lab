@@ -1,5 +1,5 @@
 // Tempo, beat phase and downbeat from a log-filtered spectrogram (100 fps). Constant tempo, 4/4.
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126s';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126t';
 
 function bandFlux(spec, frames, lo, hi) {
   const bands = [];

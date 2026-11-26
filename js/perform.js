@@ -1,5 +1,5 @@
 // Perform: clap / tap / beatbox over a click into BMY lanes. Pure analysis helpers (no DOM).
-import { logSpec, NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126s';
+import { logSpec, NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126t';
 
 /**
  * Onsets in a mono 44.1 kHz recording: [{t (s), levelDb, feat (unit vector, 84 bands)}].
