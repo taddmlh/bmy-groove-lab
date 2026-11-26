@@ -8,13 +8,13 @@ const CPU_NODES = ['/ReduceMean', '/Sub', '/Pow', '/ReduceMean_1', '/Clip', '/Sq
 const TS = 343980, BINS = 2048, FRAMES = 336, STRIDE = Math.floor(TS * 0.75);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-export const SEPARATOR_VERSION = 'lean-2';
+export const SEPARATOR_VERSION = 'lean-3';
 let dw = null, model = null;
 
-const sessOpts = (i, final) => ({
+const sessOpts = (i, final, lean) => ({
   executionProviders: i === 0 ? [{ name: 'webgpu', forceCpuNodeNames: CPU_NODES }] : ['webgpu'],
   graphOptimizationLevel: 'all',
-  preferredOutputLocation: final ? 'cpu' : 'gpu-buffer'
+  preferredOutputLocation: final || lean ? 'cpu' : 'gpu-buffer'   // lean: results go through normal memory, so a part can be closed safely
 });
 
 async function cachedBytes(url) {
@@ -69,7 +69,7 @@ async function runSegment(ort, input, onPart = () => {}) {
     onPart(i + 1, m.pieces.length);
     if (m.lean) {
       let bytes = await cachedBytes(p.url);
-      const session = await ort.InferenceSession.create(bytes, sessOpts(p.i, p.final)); bytes = null;
+      const session = await ort.InferenceSession.create(bytes, sessOpts(p.i, p.final, true)); bytes = null;
       Object.assign(env, await session.run(feeds));
       if (dev) { try { await dev.queue.onSubmittedWorkDone(); } catch (e) {} }
       try { await session.release(); } catch (e) {}

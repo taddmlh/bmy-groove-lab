@@ -1,13 +1,13 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126d';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126d';
-import { detectGrid, barTimes } from './beats.js?b=20261126d';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126d';
-import { buildBank, bankFileName } from './bank.js?b=20261126d';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126d';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126d';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126d';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126d';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126e';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126e';
+import { detectGrid, barTimes } from './beats.js?b=20261126e';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126e';
+import { buildBank, bankFileName } from './bank.js?b=20261126e';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126e';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126e';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126e';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126e';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -22,6 +22,7 @@ const log = m => {
   try { localStorage.setItem('bmyGLLog', curLog.slice(-20000)); } catch (e) {}
   $('log').textContent = (prevLog ? '— PREVIOUS PAGE LOAD —\n' + prevLog + '\n— THIS PAGE LOAD —\n' : '') + curLog;
 };
+const errText = e => { const m = (e && (e.message || String(e))) || 'unknown'; const st = e && e.stack && !e.stack.includes(m) ? '\n' + e.stack : ''; return m + st; };
 const crumb = m => { try { localStorage.setItem('bmyGLStage', m); } catch (e) {} };
 const crumbDone = () => { try { localStorage.removeItem('bmyGLStage'); } catch (e) {} };
 let lastCrash = null; try { lastCrash = localStorage.getItem('bmyGLStage'); } catch (e) {}
@@ -414,7 +415,7 @@ async function openSong({ key, name, bytes, type, buf }) {
     askPersist();
     saveNow();
   } catch (err) {
-    crumbDone(); status('Could not open that song: ' + err.message); log('ERROR ' + (err.stack || err));
+    crumbDone(); status('Could not open that song: ' + err.message); log('ERROR ' + errText(err));
   } finally { busy = false; updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); }
 }
 
@@ -691,7 +692,8 @@ $('extract').onclick = async () => {
     crumbDone(); phoneTab('pattern');
     status(`Done. Swing ${S.swing.type === 'Off' ? 'off' : S.swing.type + ' ' + S.swing.depth + '%'}. Check each pattern (turn on Drums and Pattern to hear them together), then Export to BMY.`, 1);
   } catch (err) {
-    crumbDone(); status('Extraction failed: ' + err.message); log('ERROR ' + (err.stack || err));
+    let at = ''; try { at = localStorage.getItem('bmyGLStage') || ''; } catch (e) {}
+    crumbDone(); status('Extraction failed: ' + (err.message || err)); log('ERROR during ' + at + ': ' + errText(err));
   } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); saveNow(); saveStems(); }
 };
 const FLUX_BANDS = Object.fromEntries(Object.entries({ kick: [30, 150], snare: [150, 5000], tom: [60, 600], hihat: [5000, 16000], cymbal: [3000, 16000] })
@@ -997,7 +999,7 @@ $('export').onclick = async () => {
     a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     status(`Saved ${fname} to Downloads. Tap it in Files to import it into BMY.`);
-  } catch (err) { status('Export failed: ' + err.message); log('ERROR ' + (err.stack || err)); }
+  } catch (err) { status('Export failed: ' + err.message); log('ERROR ' + errText(err)); }
 };
 
 $('bankName').addEventListener('input', scheduleSave);
@@ -1315,7 +1317,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26d';
+const BUILD = '2026-11-26e';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
