@@ -692,7 +692,7 @@ function doubleStrokes(bars) {
     const around = []; for (let f = n0; f <= n1; f++) if (Math.abs(f - pf) > 1) around.push(val(f));
     around.sort((x, y) => x - y); const floor = around.length ? around[Math.floor(around.length / 2)] : 0;
     const t = (pf + fr.f0) / FPS;
-    if (pf > 0 && pk > 0.15 * main && pk > 3 * floor + 0.3 && !S.hits.some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))
+    if (pf > 0 && pk > 0.12 * main && pk > 2.8 * floor + 0.25 && !S.hits.some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))
       out.push({ time: t, cls: h.cls, lane: h.lane, vel: 'sf', levelDb: (h.levelDb || 0) - 10, ghost: true });
   }
   return out;
