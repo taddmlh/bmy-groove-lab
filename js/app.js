@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126u';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126u';
-import { detectGrid, barTimes } from './beats.js?b=20261126u';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126u';
-import { buildBank, bankFileName } from './bank.js?b=20261126u';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126u';
-import { denoise } from './denoise.js?b=20261126u';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126u';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126u';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126u';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126v';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126v';
+import { detectGrid, barTimes } from './beats.js?b=20261126v';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126v';
+import { buildBank, bankFileName } from './bank.js?b=20261126v';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126v';
+import { denoise } from './denoise.js?b=20261126v';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126v';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126v';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126v';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -587,7 +587,7 @@ $('recentBtn').onclick = async () => {
       <div class="meta"><b>${esc(r.name)}</b><small>${r.bpm ? r.bpm.toFixed(1) + ' BPM · ' : ''}${r.marks || 0} marked · ${r.patterns || 0} pattern${r.patterns === 1 ? '' : 's'} · ${ago(r.updated)}</small></div>
       <button data-act="open">Open</button><button data-act="ren" title="Rename">✎</button><button data-act="del" title="Forget this song">✕</button>
     </div>`).join('') : '<div class="foot">No songs yet. Songs you open or record are kept here, with your work.</div>')
-    + `<div class="foot">Kept in Safari on this iPad. Add the page to your Home Screen so iPadOS keeps it longer.</div>`;
+    + `<div class="foot">${standalone ? 'Kept in Groove Lab on this device.' : 'Kept in Safari on this device. Install Groove Lab (Add to Home Screen) so they’re kept for good; the installed app has its own song list.'}</div>`;
   el.querySelectorAll('.item').forEach(it => {
     const key = it.dataset.key;
     it.querySelector('[data-act=open]').onclick = async () => {
@@ -1559,8 +1559,22 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26u';
+const BUILD = '2026-11-26v';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
+// ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if ('serviceWorker' in navigator && !/[?&]nosw\b/.test(location.search) && !/[?&]nodemucs\b/.test(location.search))
+  navigator.serviceWorker.register('sw.js').then(r => log('Offline copy ready' + (r.active ? '' : ' (first visit: kept from the next load)'))).catch(e => log('Offline copy not available: ' + e.message));
+let installEvt = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('installBtn').classList.remove('hidden'); });
+if (!standalone && isIOS) $('installBtn').classList.remove('hidden');
+if (standalone) log('Running as an installed app');
+$('installBtn').onclick = async () => {
+  if (installEvt) { installEvt.prompt(); const r = await installEvt.userChoice; if (r.outcome === 'accepted') $('installBtn').classList.add('hidden'); installEvt = null; return; }
+  alert('Install Groove Lab on this ' + (/iPhone|iPod/.test(navigator.userAgent) ? 'iPhone' : 'iPad') + ':\n\n1. Tap the Share button (square with an arrow) in Safari.\n2. Tap "Add to Home Screen" (scroll down if you don’t see it).\n3. Tap Add.\n\nThen open Groove Lab from its Home Screen icon. It runs full screen and works offline.\n\nNote: the installed app keeps its own songs, separate from Safari’s.');
+};
+addEventListener('appinstalled', () => { $('installBtn').classList.add('hidden'); log('Installed'); });
+
 // preview kit: any of BMY's GeneralUser GS kits; remembered on this device
 let kitPick = 0; try { kitPick = +(localStorage.getItem('bmyGLKit') || 0); } catch (e) {}
 $('kitSel').innerHTML = KITS.map(([p, n]) => `<option value="${p}">${esc(n)}</option>`).join('');

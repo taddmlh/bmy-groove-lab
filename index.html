@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Groove Lab">
+<meta name="theme-color" content="#0b0c10">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>BMY Groove Lab</title>
 <style>
 /* VOICE: a workbench beside BMY Drummer — dark stage, BMY's lane colours, nothing decorative.
@@ -260,6 +265,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
       <input id="file" type="file" accept="audio/*,video/*,.mp3,.m4a,.wav,.aif,.aiff,.flac,.caf,.mp4,.mov,.m4v" hidden>
       <button id="recentBtn" aria-expanded="false">Recent</button>
       <button id="rec" title="Record from the audio input">● Record</button>
+      <button id="installBtn" class="hidden" title="Install Groove Lab as an app">Install</button>
       <button id="perfBtn" aria-expanded="false" title="Clap, tap or beatbox over a click">Perform</button>
       <span id="recMeter" class="meter hidden"><i></i></span>
       <select id="inputSel" class="hidden" aria-label="Audio input"></select>
@@ -337,6 +343,6 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
   </nav>
 </div>
-<script type="module" src="js/app.js?b=20261126u"></script>
+<script type="module" src="js/app.js?b=20261126v"></script>
 </body>
 </html>
