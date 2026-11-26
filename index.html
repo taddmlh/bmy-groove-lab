@@ -71,7 +71,8 @@ input[type=number]{width:96px;text-align:right}
 .tabs button{flex:none}
 .tabs button.on{border-color:var(--markEdge);background:#0f2a35}
 #gridWrap{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:#000;border:1px solid var(--line);border-radius:12px;padding:6px 8px 6px 4px}
-#grid{flex:1 1 auto;display:flex;flex-direction:column;gap:3px;min-height:0}
+#grid{flex:1 1 auto;display:flex;flex-direction:column;gap:3px;min-height:0;position:relative}
+#gridHead{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:rgba(255,255,255,.45);box-shadow:0 0 6px rgba(255,255,255,.25);pointer-events:none;z-index:6;border-radius:1px}
 .row{flex:1 1 0;display:grid;grid-template-columns:44px repeat(16,minmax(0,1fr));grid-template-rows:100%;gap:2px;position:relative;min-height:0;overflow:hidden}
 .glyph{display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:6px}
 .glyph:active{background:#1d2028}
@@ -304,6 +305,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
   <section class="bottom">
     <div class="bar">
       <div id="tabs" class="tabs grow"></div>
+      <button id="gridPlay" title="Play / stop (what you hear is set in the mixer)">▶︎</button>
       <button id="undo" disabled>Undo</button>
     </div>
     <div id="gridWrap">
@@ -332,6 +334,6 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
   </nav>
 </div>
-<script type="module" src="js/app.js?b=20261126k"></script>
+<script type="module" src="js/app.js?b=20261126m"></script>
 </body>
 </html>

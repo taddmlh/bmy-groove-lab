@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126k';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126k';
-import { detectGrid, barTimes } from './beats.js?b=20261126k';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126k';
-import { buildBank, bankFileName } from './bank.js?b=20261126k';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126k';
-import { denoise } from './denoise.js?b=20261126k';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126k';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126k';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126k';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126m';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126m';
+import { detectGrid, barTimes } from './beats.js?b=20261126m';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126m';
+import { buildBank, bankFileName } from './bank.js?b=20261126m';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126m';
+import { denoise } from './denoise.js?b=20261126m';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126m';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126m';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126m';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -103,6 +103,17 @@ function drawWave(c, mono, color, extracted) {
     }
   }
   drawOverlays(g, w, h, dpr);
+  if (c.id === 'wDrums' && S.sel && !S.locked && selIsBars()) drawShiftGrip(g, w, h, dpr);
+}
+// bottom handle on the drums lane: drag to move the whole bar (start and end together, tempo unchanged)
+const SHIFT_H = 18;
+function drawShiftGrip(g, w, h, dpr) {
+  const x0 = tToX(S.sel.a, w, dpr), x1 = tToX(S.sel.b, w, dpr), y = h - (SHIFT_H - 2) * dpr, hh = (SHIFT_H - 5) * dpr;
+  g.fillStyle = 'rgba(255,173,20,.9)';
+  if (g.roundRect) { g.beginPath(); g.roundRect(x0, y, x1 - x0, hh, 4 * dpr); g.fill(); } else g.fillRect(x0, y, x1 - x0, hh);
+  g.fillStyle = '#000'; const cx = (x0 + x1) / 2, cy = y + hh / 2;
+  for (const dx of [-6, -2, 2, 6]) g.fillRect(cx + dx * dpr, y + 3 * dpr, dpr, hh - 6 * dpr);
+  for (const [x, d] of [[cx - 16 * dpr, -1], [cx + 16 * dpr, 1]]) { g.beginPath(); g.moveTo(x + d * 5 * dpr, cy); g.lineTo(x, cy - 4 * dpr); g.lineTo(x, cy + 4 * dpr); g.fill(); }
 }
 function drawBarShading(g, w, h, dpr, viewEnd) {
   for (const b of S.bars) {
@@ -260,29 +271,42 @@ function pointerDrag(el, { down, move, up }) {
     clampView(); redraw();
   }, { passive: false });
 }
-function handleHit(st) {          // grab the start or end of a bar-aligned selection
+function handleHit(st) {          // top grips (ruler): left = bar start, right = bar end; each moves on its own
   if (!S.grid || S.locked || !selIsBars()) return false;
   const xa = (S.sel.a - S.view.start) * S.view.pps, xb = (S.sel.b - S.view.start) * S.view.pps;
   const n = Math.round((S.sel.b - S.sel.a) / barSec());
-  if (Math.abs(st.x - xa) < 22) { Object.assign(st, { mode: 'start', a0: S.sel.a, n }); return true; }
-  if (Math.abs(st.x - xb) < 22) { Object.assign(st, { mode: 'end', a0: S.sel.a, n }); return true; }
+  if (Math.abs(st.x - xa) < 22) { Object.assign(st, { mode: 'start', a0: S.sel.a, b0: S.sel.b, n }); return true; }
+  if (Math.abs(st.x - xb) < 22) { Object.assign(st, { mode: 'end', a0: S.sel.a, b0: S.sel.b, n }); return true; }
   return false;
 }
+function shiftHit(st, e) {        // bottom handle (drums lane): moves start and end together
+  if (!S.grid || S.locked || !selIsBars()) return false;
+  const y = e.clientY - st.r.top; if (y < st.r.height - SHIFT_H - 6) return false;
+  const xa = (S.sel.a - S.view.start) * S.view.pps, xb = (S.sel.b - S.view.start) * S.view.pps;
+  if (st.x < xa - 10 || st.x > xb + 10) return false;
+  Object.assign(st, { mode: 'shift', a0: S.sel.a, xd: st.x, n: Math.round((S.sel.b - S.sel.a) / barSec()) });
+  return true;
+}
+const setTempoFromLen = len => { S.grid.bpm = Math.max(30, Math.min(300, Math.round(240 / len * 100) / 100)); };
 function handleMove(st) {
-  if (st.mode === 'start') {          // slide every bar line, tempo unchanged
-    const a = Math.max(-barSec(), Math.min(S.dur, xToT(st.x)));
-    S.grid.t0 = a; S.sel = { a, b: a + st.n * barSec() };
+  if (st.mode === 'shift') {          // slide every bar line, tempo unchanged
+    const a = Math.max(-barSec(), Math.min(S.dur, st.a0 + (st.x - st.xd) / S.view.pps));
+    S.grid.t0 = a; gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; redraw(); syncPlayback(true);
+    status(`Bar moved: starts at ${a.toFixed(3)} s, ${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
+  } else if (st.mode === 'start') {   // start follows the finger, end stays put: tempo follows
+    const a = Math.min(st.b0 - 0.2 * st.n, xToT(st.x));
+    setTempoFromLen((st.b0 - a) / st.n); S.grid.t0 = a;
     gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; redraw(); syncPlayback(true);
-    status(`Bar start ${a.toFixed(3)} s — release to re-transcribe`);
-  } else {                            // stretch: start stays, tempo follows the end
+    status(`Bar start ${a.toFixed(3)} s, ${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
+  } else {                            // end follows the finger, start stays put: tempo follows
     const b = xToT(st.x), len = Math.max(0.2, b - st.a0) / st.n;
-    S.grid.bpm = Math.max(30, Math.min(300, Math.round(240 / len * 100) / 100)); S.grid.t0 = st.a0;
+    setTempoFromLen(len); S.grid.t0 = st.a0;
     gridChanged(null, true); S.sel = { a: st.a0, b: st.a0 + st.n * barSec() }; redraw(); syncPlayback(true);
-    status(`${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
+    status(`Bar end ${(st.a0 + st.n * barSec()).toFixed(3)} s, ${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
   }
 }
 function handleUp(st) {
-  gridChanged(st.mode === 'start' ? 'Bar lines moved. Drag the right edge to set the tempo.' : `Tempo set to ${S.grid.bpm.toFixed(2)} BPM.`);
+  gridChanged(st.mode === 'shift' ? `Bar lines moved (tempo unchanged, ${S.grid.bpm.toFixed(2)} BPM).` : `Bar ${st.mode === 'start' ? 'start' : 'end'} set: ${S.grid.bpm.toFixed(2)} BPM.`);
 }
 // Ruler: tap = mark/unmark bar; drag = scroll; drag a grip = move the bar start / set the tempo
 pointerDrag($('ruler'), {
@@ -300,7 +324,7 @@ pointerDrag($('ruler'), {
 });
 // Waveforms: tap = select that bar (and move playhead); drag = select a range, snapped to bars
 for (const id of ['wMix', 'wDrums']) pointerDrag($(id), {
-  down: st => { st.t0 = xToT(st.x); st.mode = 'select'; handleHit(st); },
+  down: (st, e) => { st.t0 = xToT(st.x); st.mode = 'select'; if (id === 'wDrums') shiftHit(st, e); },
   move: st => {
     if (!S.grid || !st.moved) return;
     if (st.mode !== 'select') return handleMove(st);
@@ -409,7 +433,7 @@ async function openSong({ key, name, bytes, type, buf }) {
       rebuildBars();
       { const w = waveW(); S.view.pps = Math.max(8, w / (barSec() * Math.max(3, Math.min(12, w / 110)))); }   // ~12 bars on iPad, ~3-4 on a phone
       S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
-      status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
+      status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or use the orange handles on the selected bar: the top ones (bar-number strip) move the start or the end on its own; the bar under the drums lane moves the whole bar. Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
     }
     setBpmField();
     crumbDone();
@@ -1018,9 +1042,24 @@ function syncPlayback(live) {
   startPlay(outside ? a : posNow);
 }
 $('loop').onclick = () => { S.loop = !S.loop; $('loop').classList.toggle('on', S.loop); if (playing) startPlay(posNow); };
+$('gridPlay').onclick = () => $('play').click();
 $('play').onclick = () => { if (!playing && P.clock && !P.rec) stopClock(); return playing ? stopPlay() : startPlay(); };
+// playhead on the pattern grid: where playback is inside the bar on screen
+function drawGridHead(t) {
+  const g = $('grid'); let el = $('gridHead');
+  const bar = S.tab != null && S.bars[S.tab], row = g.querySelector('.row');
+  const frac = bar && t != null ? (t - bar.start) / (bar.end - bar.start) : -1;
+  if (!row || g.classList.contains('hidden') || frac < 0 || frac >= 1) { if (el) el.style.display = 'none'; return; }
+  if (!el) { el = document.createElement('div'); el.id = 'gridHead'; g.appendChild(el); }
+  const c0 = row.children[1], c1 = row.children[16];
+  const x0 = row.offsetLeft + c0.offsetLeft, x1 = row.offsetLeft + c1.offsetLeft + c1.offsetWidth;
+  el.style.display = 'block'; el.style.left = (x0 + frac * (x1 - x0)).toFixed(1) + 'px';
+  const x = x0 + frac * (x1 - x0);                                         // phone: keep it in view when the grid scrolls sideways
+  if (g.scrollWidth > g.clientWidth + 4 && (x > g.scrollLeft + g.clientWidth - 24 || x < g.scrollLeft + 44)) g.scrollLeft = Math.max(0, x - 60);
+}
 function stopPlay() {
-  killNodes(); playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶︎ Play';
+  drawGridHead(null);
+  killNodes(); playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶︎ Play'; $('gridPlay').textContent = '▶︎'; $('gridPlay').classList.remove('on');
 }
 function startPlay(from) {
   if (!S.mixBuf) return;
@@ -1045,7 +1084,7 @@ function startPlay(from) {
   if (items.length) { patA = a; make('pattern', renderRegion(ctx, a, b, items, S.swing), 0, b - a, pos - a); }
   nodes.mix.onended = () => { if (playing && !S.loop) stopPlay(); };
   posNow = pos; lastCtxT = t0; loopA = a; loopB = b;
-  playing = true; $('play').textContent = '■ Stop';
+  playing = true; $('play').textContent = '■ Stop'; $('gridPlay').textContent = '■'; $('gridPlay').classList.add('on');
   if (!S.drumBuf && S.mixer.drums.on) status('Drums are silent until you extract them.');
   cancelAnimationFrame(raf);
   const tick = () => {
@@ -1056,6 +1095,7 @@ function startPlay(from) {
     if (!S.loop) posNow = Math.min(posNow, loopB);
     S.playhead = posNow;
     drawRuler(); drawWave($('wMix'), S.mixMono, '#9aa3b5'); drawWave($('wDrums'), S.drumMono, '#ec8a2c', S.extracted);
+    drawGridHead(posNow - (ctx.outputLatency || 0));
     raf = requestAnimationFrame(tick);
   };
   raf = requestAnimationFrame(tick);
@@ -1418,7 +1458,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26k';
+const BUILD = '2026-11-26m';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
