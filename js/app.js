@@ -683,7 +683,7 @@ function doubleStrokes(bars) {
   const out = [];
   for (const h of S.hits) {
     const b = bars.find(x => h.time >= x.start - x.step / 2 && h.time < x.end - x.step / 2); if (!b) continue;
-    if (!['kick', 'snare', 'tom'].includes(h.cls)) continue;   // hats/cymbals pick up snare noise
+    if (!['snare', 'tom'].includes(h.cls)) continue;   // kick ring and hats/cymbals give false doubles
     const c = CLASSES.indexOf(h.cls), fr = (S.flux || []).find(r => h.time >= r.a && h.time < r.b); if (c < 0 || !fr) continue;
     const at = t => Math.round(t * FPS) - fr.f0, val = f => (f > 0 && f < fr.frames ? fr.data[f * 5 + c] : 0);
     const fh = at(h.time); let main = 0; for (let f = fh - 2; f <= fh + 2; f++) main = Math.max(main, val(f));
@@ -692,7 +692,7 @@ function doubleStrokes(bars) {
     const around = []; for (let f = n0; f <= n1; f++) if (Math.abs(f - pf) > 1) around.push(val(f));
     around.sort((x, y) => x - y); const floor = around.length ? around[Math.floor(around.length / 2)] : 0;
     const t = (pf + fr.f0) / FPS;
-    if (pf > 0 && pk > 0.1 * main && pk > 2.5 * floor + 0.2 && !S.hits.some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))
+    if (pf > 0 && pk > 0.15 * main && pk > 3 * floor + 0.3 && !S.hits.some(o => o.cls === h.cls && Math.abs(o.time - t) < 0.3 * b.step))
       out.push({ time: t, cls: h.cls, lane: h.lane, vel: 'sf', levelDb: (h.levelDb || 0) - 10, ghost: true });
   }
   return out;
@@ -984,6 +984,17 @@ $('export').onclick = async () => {
 
 $('bankName').addEventListener('input', scheduleSave);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
+$('saveStem').onclick = async () => {
+  if (!S.drumBuf || !S.extracted.length) { status('No drums yet: extract some bars first.'); return; }
+  const a = Math.min(...S.extracted.map(r => r[0])), b = Math.max(...S.extracted.map(r => r[1]));
+  const s0 = Math.floor(a * SR), s1 = Math.floor(b * SR), ctx = audioCtx(), buf = ctx.createBuffer(2, s1 - s0, SR);
+  for (let c = 0; c < 2; c++) buf.getChannelData(c).set(S.drumBuf.getChannelData(c).subarray(s0, s1));
+  const fname = `${S.name} drums ${a.toFixed(1)}-${b.toFixed(1)}s.wav`;
+  const file = new File([wavBytes(buf)], fname, { type: 'audio/wav' });
+  log(`Saved stem ${fname}; grid ${S.grid.bpm} BPM, bar lines at ${S.bars.filter(x => x.end > a && x.start < b).map(x => (x.start - a).toFixed(3)).join(', ')} s into the file`);
+  if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: fname }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  const url = URL.createObjectURL(file), el = document.createElement('a'); el.href = url; el.download = fname; document.body.appendChild(el); el.click(); el.remove();
+};
 $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($('log').textContent); $('copyLog').textContent = 'Copied'; } catch (e) { $('copyLog').textContent = 'Copy failed'; } };
 
 // ---------------------------------------------------------------- start
