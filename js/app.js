@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126t';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126t';
-import { detectGrid, barTimes } from './beats.js?b=20261126t';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126t';
-import { buildBank, bankFileName } from './bank.js?b=20261126t';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126t';
-import { denoise } from './denoise.js?b=20261126t';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126t';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126t';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126t';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126u';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126u';
+import { detectGrid, barTimes } from './beats.js?b=20261126u';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126u';
+import { buildBank, bankFileName } from './bank.js?b=20261126u';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126u';
+import { denoise } from './denoise.js?b=20261126u';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126u';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126u';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126u';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1559,8 +1559,23 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26t';
+const BUILD = '2026-11-26u';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
-loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
+// preview kit: any of BMY's GeneralUser GS kits; remembered on this device
+let kitPick = 0; try { kitPick = +(localStorage.getItem('bmyGLKit') || 0); } catch (e) {}
+$('kitSel').innerHTML = KITS.map(([p, n]) => `<option value="${p}">${esc(n)}</option>`).join('');
+$('kitSel').value = String(kitPick);
+async function useKit(p) {
+  $('kitSel').disabled = true;
+  try {
+    const k = await loadKit(audioCtx(), p); log('Preview kit: ' + k.name);
+    try { localStorage.setItem('bmyGLKit', String(p)); } catch (e) {}
+    if (playing) syncPlayback(true);
+  } catch (e) { log('Preview kit failed: ' + e.message); status('Could not load that kit: ' + e.message); $('kitSel').value = String(kitPick); }
+  finally { $('kitSel').disabled = false; }
+  kitPick = +$('kitSel').value;
+}
+$('kitSel').onchange = () => { status('Loading the ' + $('kitSel').selectedOptions[0].textContent + ' kit…'); useKit(+$('kitSel').value).then(() => status(`Preview kit: ${$('kitSel').selectedOptions[0].textContent}. Tap a lane icon to hear a drum.`)); };
+useKit(kitPick);
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
 updateButtons(); showLock(); renderGrid(); redraw();

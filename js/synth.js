@@ -1,5 +1,5 @@
 // Tiny drum synth for auditioning a BMY-style pattern (not a kit: just enough to check timing).
-import { VEL_MIDI } from './transcribe.js?b=20261126t';
+import { VEL_MIDI } from './transcribe.js?b=20261126u';
 const SR = 44100;
 
 const voices = {};
@@ -74,12 +74,17 @@ export function renderBar(ctx, pattern, swing, bpm) {
   return buf;
 }
 
-// ---- BMY's built-in kit: GeneralUser GS "Standard 1", rendered per BMY velocity label (kit/kit.json)
+// ---- BMY's built-in kits: GeneralUser GS drum programs, rendered per BMY velocity label (kit/[program/]kit.json)
 const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
-const KIT_VERSION = 4;   // bump when the kit is re-rendered, so browsers fetch the new samples
-let KIT = null;
-export async function loadKit(ctx, base = 'kit/') {
-  if (KIT) return KIT;
+const KIT_VERSION = 5;   // bump when kits are re-rendered, so browsers fetch the new samples
+/** The kits BMY offers (BMY_SoundFontKit.swift gsKits). Program 0 lives in kit/, the rest in kit/<program>/. */
+export const KITS = [[0, 'Standard 1'], [1, 'Standard 2'], [2, 'Standard 3'], [8, 'Room'], [16, 'Power'], [24, 'Electronic'],
+  [25, '808/909'], [26, 'Dance'], [32, 'Jazz'], [40, 'Brush'], [48, 'Orchestral'], [56, 'SFX']];
+const loaded = new Map();     // program -> kit
+let KIT = null, STD = null;   // current kit; Standard 1 (fills lanes a kit doesn't have)
+async function fetchKit(ctx, program) {
+  if (loaded.has(program)) return loaded.get(program);
+  const base = program ? `kit/${program}/` : 'kit/';
   const man = await (await fetch(base + 'kit.json?v=' + KIT_VERSION)).json();
   const lanes = {};
   await Promise.all(Object.entries(man.notes).map(async ([lane, n]) => {
@@ -87,9 +92,17 @@ export async function loadKit(ctx, base = 'kit/') {
     const data = buf.getChannelData(0), k = buf.sampleRate / man.sr;
     lanes[lane] = { excl: n.exclusiveClass, layers: n.layers.map(([o, l]) => data.subarray(Math.round(o * k), Math.round((o + l) * k))) };
   }));
-  KIT = { name: man.kit, lanes };
+  const kit = { program, name: man.kit, lanes };
+  loaded.set(program, kit);
+  return kit;
+}
+/** Load (or switch to) a kit. Standard 1 is always loaded too, for lanes a kit lacks (e.g. SFX has no kick). */
+export async function loadKit(ctx, program = 0) {
+  STD = await fetchKit(ctx, 0);
+  KIT = await fetchKit(ctx, +program || 0);
   return KIT;
 }
+export const kitProgram = () => (KIT ? KIT.program : 0);
 export const kitLoaded = () => !!KIT;
 /** Play one kit sound now (lane icon tap). */
 export function audition(ctx, lane, vel = 'n2') {
@@ -110,7 +123,7 @@ function sound(e) {
     trim = Math.min(1.5, Math.pow(v / VEL_MIDI[vel], 2));
   }
   if (KIT) {
-    const k = KIT.lanes[KIT_LANE[e.lane]];
+    const k = KIT.lanes[KIT_LANE[e.lane]] || (STD && STD.lanes[KIT_LANE[e.lane]]);
     if (k) { const li = VELS.indexOf(vel); return { data: k.layers[li < 0 ? 3 : li], gain: trim, excl: k.excl }; }
   }
   return { data: voice(e.voice), gain: (VEL_MIDI[vel] || 82) / 127 * trim, excl: e.voice === 'hat' || e.voice === 'ohat' ? 1 : 0 };
