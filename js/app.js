@@ -115,9 +115,20 @@ function drawOverlays(g, w, h, dpr) {
     const x0 = tToX(S.sel.a, w, dpr), x1 = tToX(S.sel.b, w, dpr);
     g.fillStyle = 'rgba(255,173,20,.16)'; g.fillRect(x0, 0, x1 - x0, h);
     g.fillStyle = '#ffad14'; g.fillRect(x0, 0, 2 * dpr, h); g.fillRect(x1 - 2 * dpr, 0, 2 * dpr, h);
+    if (selIsBars()) {
+      const hh = Math.min(h * 0.5, 34 * dpr), y = (h - hh) / 2, hw = 10 * dpr;
+      g.fillRect(x0, y, hw, hh); g.fillRect(x1 - hw, y, hw, hh);
+      g.fillStyle = '#000';
+      for (const x of [x0 + 3 * dpr, x1 - 7 * dpr]) { g.fillRect(x, y + hh * 0.3, dpr, hh * 0.4); g.fillRect(x + 3 * dpr, y + hh * 0.3, dpr, hh * 0.4); }
+    }
   }
   const px = tToX(S.playhead, w, dpr);
   g.fillStyle = '#ffffff'; g.fillRect(px, 0, Math.max(1, 1.5 * dpr), h);
+}
+function selIsBars() {
+  if (!S.sel || !S.grid) return false;
+  const a = barAt(S.sel.a + 0.001), b = barAt(S.sel.b - 0.001);
+  return a >= 0 && b >= 0 && Math.abs(S.bars[a].start - S.sel.a) < 1e-6 && Math.abs(S.bars[b].end - S.sel.b) < 1e-6;
 }
 function drawRuler() {
   const c = $('ruler'), { w, h, dpr } = canvasSize(c), g = c.getContext('2d');
@@ -198,15 +209,41 @@ pointerDrag($('ruler'), {
 });
 // Waveforms: tap = select that bar (and move playhead); drag = select a range, snapped to bars
 for (const id of ['wMix', 'wDrums']) pointerDrag($(id), {
-  down: st => { st.t0 = xToT(st.x); },
+  down: st => {
+    st.t0 = xToT(st.x); st.mode = 'select';
+    if (S.grid && selIsBars()) {
+      const xa = (S.sel.a - S.view.start) * S.view.pps, xb = (S.sel.b - S.view.start) * S.view.pps;
+      const n = Math.round((S.sel.b - S.sel.a) / barSec());
+      if (Math.abs(st.x - xa) < 22) Object.assign(st, { mode: 'start', a0: S.sel.a, n });
+      else if (Math.abs(st.x - xb) < 22) Object.assign(st, { mode: 'end', a0: S.sel.a, n });
+    }
+  },
   move: st => {
     if (!S.grid || !st.moved) return;
+    if (st.mode === 'start') {          // slide every bar line, tempo unchanged
+      const a = Math.max(-barSec(), Math.min(S.dur, xToT(st.x)));
+      S.grid.t0 = a; S.sel = { a, b: a + st.n * barSec() };
+      gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; S.playhead = Math.max(0, a); redraw();
+      status(`Bar start ${a.toFixed(3)} s — release to re-transcribe`);
+      return;
+    }
+    if (st.mode === 'end') {            // stretch: start stays, tempo follows the end
+      const b = xToT(st.x), len = Math.max(0.2, b - st.a0) / st.n;
+      S.grid.bpm = Math.max(30, Math.min(300, Math.round(240 / len * 100) / 100)); S.grid.t0 = st.a0;
+      gridChanged(null, true); S.sel = { a: st.a0, b: st.a0 + st.n * barSec() }; redraw();
+      status(`${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
+      return;
+    }
     const a = Math.min(st.t0, xToT(st.x)), b = Math.max(st.t0, xToT(st.x));
     const ba = barAt(a), bb = barAt(b);
     S.sel = ba >= 0 && bb >= 0 ? { a: S.bars[ba].start, b: S.bars[bb].end } : { a: Math.max(0, a), b: Math.min(S.dur, b) };
     S.playhead = Math.max(0, S.sel.a); redraw();
   },
   up: st => {
+    if (S.grid && st.moved && (st.mode === 'start' || st.mode === 'end')) {
+      gridChanged(st.mode === 'start' ? 'Bar lines moved. Drag the right edge to set the tempo.' : `Tempo set to ${S.grid.bpm.toFixed(2)} BPM.`);
+      return;
+    }
     if (!S.grid || st.moved) return;
     const t = xToT(st.x), i = barAt(t);
     S.playhead = Math.max(0, Math.min(S.dur, t));
@@ -290,7 +327,7 @@ $('file').addEventListener('change', async e => {
     S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (barSec() * 12));
     S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
     crumbDone();
-    status(`${S.grid.bpm} BPM. Check the bar lines (play a bar), fix with the BPM and ◀︎ ▶︎ controls, then tap bar numbers to mark up to 6 bars.`, 1);
+    status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange edges of the selected bar (left edge = bar start, right edge = tempo). Then tap bar numbers to mark up to 6 bars.`, 1);
   } catch (err) {
     crumbDone(); status('Could not open that file: ' + err.message); log('ERROR ' + (err.stack || err));
   } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); }
@@ -314,9 +351,18 @@ async function specAsync(mono, onP) {   // logSpec in chunks so the page stays r
 
 // ---------------------------------------------------------------- tempo controls
 function setBpmField() { $('bpm').value = S.grid ? S.grid.bpm.toFixed(2) : ''; }
-function gridChanged(note) {
+const mid = i => (S.bars[i].start + S.bars[i].end) / 2;
+function gridChanged(note, live) {
+  const markT = S.marks.map(mid), tabT = S.tab !== null && S.bars[S.tab] ? mid(S.tab) : null;
+  const selBar = S.sel ? barAt(S.sel.a + 0.001) : -1, selBarEnd = S.sel ? barAt(S.sel.b - 0.001) : -1;
+  const selT = selBar >= 0 && S.sel.a === S.bars[selBar].start ? [mid(selBar), mid(selBarEnd)] : null;
   rebuildBars(); setBpmField();
-  if (S.hits.length) { buildPatterns(true); if (note) status(note); }
+  S.marks = [...new Set(markT.map(barAt).filter(i => i >= 0))].sort((a, b) => a - b);
+  S.tab = tabT === null ? null : barAt(tabT);
+  if (selT) { const a = barAt(selT[0]), b = barAt(selT[1]); if (a >= 0 && b >= 0) S.sel = { a: S.bars[a].start, b: S.bars[b].end }; }
+  if (live) { redraw(); return; }
+  if (S.hits.length) { S.patterns = new Map(); buildPatterns(true); if (note) status(note); }
+  else if (note) status(note);
   afterMarksChanged();
 }
 const anchor = () => (S.sel ? S.sel.a : S.playhead);
@@ -334,6 +380,8 @@ $('half').onclick = () => S.grid && setBpm(S.grid.bpm / 2);
 $('dbl').onclick = () => S.grid && setBpm(S.grid.bpm * 2);
 $('nudgeL').onclick = () => { if (!S.grid) return; S.grid.t0 -= 0.01; gridChanged(); };
 $('nudgeR').onclick = () => { if (!S.grid) return; S.grid.t0 += 0.01; gridChanged(); };
+$('beatL').onclick = () => { if (!S.grid) return; S.grid.t0 -= 60 / S.grid.bpm; gridChanged('Bar lines moved one beat earlier.'); };
+$('beatR').onclick = () => { if (!S.grid) return; S.grid.t0 += 60 / S.grid.bpm; gridChanged('Bar lines moved one beat later.'); };
 $('barHere').onclick = () => { if (!S.grid) return; S.grid.t0 = S.playhead; gridChanged('Bar line moved to the playhead.'); };
 
 // ---------------------------------------------------------------- extract + transcribe
@@ -514,8 +562,8 @@ $('hatRide').onchange = () => { const p = S.patterns.get(S.tab); if (!p) return;
 
 // ---------------------------------------------------------------- playback
 let playing = false, srcNode = null, playT0 = 0, playA = 0, playLen = 0, raf = 0;
-document.querySelectorAll('.seg button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.seg button').forEach(x => x.classList.toggle('on', x === b));
+document.querySelectorAll('#srcSeg button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#srcSeg button').forEach(x => x.classList.toggle('on', x === b));
   S.src = b.dataset.src; if (playing) startPlay();
 });
 $('loop').onclick = () => { S.loop = !S.loop; $('loop').classList.toggle('on', S.loop); if (playing) startPlay(); };

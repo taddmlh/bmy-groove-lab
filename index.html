@@ -80,9 +80,9 @@ details pre{white-space:pre-wrap;max-height:30vh;overflow:auto;margin:6px 0}
       <button id="bpmUp" title="Tempo up 0.1">+</button>
       <button id="half" title="Half tempo">÷2</button>
       <button id="dbl" title="Double tempo">×2</button>
-      <button id="nudgeL" title="Move bar lines earlier">◀︎</button>
+      <span class="seg"><button id="beatL" title="Bar lines one beat earlier">◀︎ Beat</button><button id="beatR" title="Bar lines one beat later">Beat ▶︎</button></span>
+      <span class="seg"><button id="nudgeL" title="Bar lines 10 ms earlier">◀︎</button><button id="nudgeR" title="Bar lines 10 ms later">▶︎</button></span>
       <button id="barHere" title="Put a bar line at the playhead">Bar 1 here</button>
-      <button id="nudgeR" title="Move bar lines later">▶︎</button>
     </div>
     <canvas id="overview" aria-label="Whole song: tap or drag to move the view"></canvas>
     <div id="detail">
@@ -91,7 +91,7 @@ details pre{white-space:pre-wrap;max-height:30vh;overflow:auto;margin:6px 0}
       <div style="position:relative"><canvas id="wDrums"></canvas><span class="tracklabel" style="top:4px">Drums</span></div>
     </div>
     <div class="bar">
-      <div class="seg" role="group" aria-label="Play source">
+      <div id="srcSeg" class="seg" role="group" aria-label="Play source">
         <button data-src="mix" class="on">Song</button><button data-src="drums">Drums</button><button data-src="pattern">Pattern</button>
       </div>
       <button id="play" class="primary" style="min-width:92px">▶︎ Play</button>
