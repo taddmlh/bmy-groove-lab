@@ -1,6 +1,6 @@
 // ADTOF drum transcription (Frame_RNN, 5 classes) via onnxruntime-web.
 // Model: ADTOF-pytorch weights (xavriley/ADTOF-pytorch) exported to ONNX, parity 7e-7 vs PyTorch.
-import { logSpec, NBANDS, FPS } from './dsp.js?b=20261126x';
+import { logSpec, NBANDS, FPS } from './dsp.js?b=20261127a';
 
 export const CLASSES = ['kick', 'snare', 'tom', 'hihat', 'cymbal'];   // GM 35, 38, 47, 42, 49
 export const THRESHOLDS = [0.22, 0.24, 0.32, 0.22, 0.30];

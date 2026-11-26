@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126x';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127a';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
@@ -96,11 +96,11 @@ export function assignLanes(hits, bars) {
     else if (h.cls === 'snare') h.lane = 'snare';
     else if (h.cls === 'tom') h.lane = tm.get(Math.round(h.pitch)) || 'tomMid';
     else if (h.cls === 'hihat') h.lane = h.decay > 0.2 ? 'openHat' : 'closedHat';
-    else if (h.cls === 'cymbal') h.lane = 'crash';
+    else if (h.cls === 'cymbal') h.lane = h.kind || 'crash';      // Magenta tells ride from crash; ADTOF doesn't
   }
   // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
   for (const bar of bars) {
-    const cy = hits.filter(h => h.cls === 'cymbal' && h.time >= bar.start - bar.step / 4 && h.time < bar.end - bar.step / 4);
+    const cy = hits.filter(h => h.cls === 'cymbal' && !h.kind && h.time >= bar.start - bar.step / 4 && h.time < bar.end - bar.step / 4);
     if (cy.length >= 3) cy.forEach(h => { if (!h.fixedLane) h.lane = 'ride'; });
   }
   // Velocity: loudness against the median of the same instrument across the marked bars.
