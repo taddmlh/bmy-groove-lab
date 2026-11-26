@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126v';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126v';
-import { detectGrid, barTimes } from './beats.js?b=20261126v';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126v';
-import { buildBank, bankFileName } from './bank.js?b=20261126v';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126v';
-import { denoise } from './denoise.js?b=20261126v';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126v';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126v';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126v';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126w';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126w';
+import { detectGrid, barTimes } from './beats.js?b=20261126w';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126w';
+import { buildBank, bankFileName } from './bank.js?b=20261126w';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126w';
+import { denoise } from './denoise.js?b=20261126w';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126w';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261126w';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126w';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1559,7 +1559,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26v';
+const BUILD = '2026-11-26w';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 // ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;

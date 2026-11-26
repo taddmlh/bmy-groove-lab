@@ -113,6 +113,8 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
 #rsGain{accent-color:var(--acc)}
 .recsheet{width:min(520px,94vw);left:auto;right:10px}
 .title:not(:empty)::after{content:' ✎';font-weight:400;font-size:.8em;color:var(--dim)}
+/* installed app (iPadOS/iOS 26): the system fades content just under the status bar; start the page below that fade */
+@media (display-mode: standalone){ body{padding-top:calc(env(safe-area-inset-top) + 22px)} }
 .tools{display:contents}
 #pListen.live{background:var(--acc);border-color:var(--acc);color:#000;font-weight:600;animation:listen 1.4s ease-in-out infinite}
 @keyframes listen{50%{box-shadow:0 0 0 5px rgba(255,173,20,.25)}}
@@ -191,6 +193,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
   body{padding-bottom:0}
 }
 @media ((max-width:700px), (max-height:500px)) and (display-mode:standalone){
+  #app{height:100%}               /* no Safari toolbars here: fill the space left under the top padding */
   .phonetabs{padding-bottom:calc(env(safe-area-inset-bottom) + 4px)}
 }
 @media (max-height:500px){
@@ -343,6 +346,6 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
   </nav>
 </div>
-<script type="module" src="js/app.js?b=20261126v"></script>
+<script type="module" src="js/app.js?b=20261126w"></script>
 </body>
 </html>
