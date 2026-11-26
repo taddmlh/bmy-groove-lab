@@ -76,6 +76,7 @@ function tomLanes(hits) {
 export function assignLanes(hits, bars) {
   const tm = tomLanes(hits);
   for (const h of hits) {
+    if (h.fixedLane) continue;                // Perform: the lane was chosen (lane mode) or taught (beatbox)
     if (h.cls === 'kick') h.lane = 'kick';
     else if (h.cls === 'snare') h.lane = 'snare';
     else if (h.cls === 'tom') h.lane = tm.get(Math.round(h.pitch)) || 'tomMid';
@@ -85,7 +86,7 @@ export function assignLanes(hits, bars) {
   // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
   for (const bar of bars) {
     const cy = hits.filter(h => h.cls === 'cymbal' && h.time >= bar.start - bar.step / 4 && h.time < bar.end - bar.step / 4);
-    if (cy.length >= 3) cy.forEach(h => { h.lane = 'ride'; });
+    if (cy.length >= 3) cy.forEach(h => { if (!h.fixedLane) h.lane = 'ride'; });
   }
   // Velocity: loudness against the median of the same instrument across the marked bars.
   const groups = {};

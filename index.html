@@ -44,7 +44,12 @@ input[type=number]{width:96px;text-align:right}
 .recent .foot{color:var(--dim);font-size:12px;padding:8px}
 #inputSel{max-width:130px}
 @media (max-width:1500px){.bpmlabel{display:none}}
-#rec.on{background:#e5484d;border-color:#e5484d;color:#fff;font-weight:600}
+.perf{width:min(820px,96vw)}
+#pBpm{width:88px}
+.sound{display:inline-flex;align-items:center;gap:4px;margin-right:6px;border:1px solid var(--line);border-radius:10px;padding:2px 2px 2px 8px}
+.sound.ok{border-color:#3fbf6a}
+.sound select{min-height:34px;font-size:14px}
+#rec.on,#pRec.on{background:#e5484d;border-color:#e5484d;color:#fff;font-weight:600}
 .meter{display:inline-block;width:70px;height:8px;background:#22252d;border-radius:4px;overflow:hidden}.meter>i{display:block;height:100%;width:0;background:#3fbf6a}
 .mixer{display:inline-flex;flex-wrap:wrap;gap:6px}
 .ch{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:0 8px 0 0;background:var(--panel)}
@@ -92,12 +97,35 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
 <body>
 <div id="app">
   <div id="recent" class="recent hidden" role="dialog" aria-label="Recent songs"></div>
+  <div id="perf" class="recent perf hidden" role="dialog" aria-label="Perform">
+    <h3>Perform: clap, tap or beatbox over a click</h3>
+    <div class="bar">
+      <span class="label">Tempo</span><input id="pBpm" type="number" min="40" max="240" step="0.1" value="100">
+      <button id="pTap">Tap</button><button id="pListen" title="Clap quarter notes for a few seconds">Listen</button>
+      <span class="label">Bars</span><span class="seg" id="pBars"><button data-n="1">1</button><button data-n="2" class="on">2</button><button data-n="4">4</button></span>
+      <span class="label">Click</span><input id="pClick" type="range" min="0" max="100" value="70" style="width:90px;accent-color:var(--acc)">
+    </div>
+    <div class="bar" style="margin-top:8px">
+      <span class="seg" id="pMode"><button data-m="lane" class="on">Into lane</button><button data-m="beatbox">Beatbox</button></span>
+      <select id="pLane" aria-label="Lane"></select>
+      <span id="pTeachBox" class="hidden"><span id="pSounds"></span></span>
+    </div>
+    <div class="bar" style="margin-top:8px">
+      <button id="pRec" class="primary" style="min-width:130px">● Record take</button>
+      <label class="label" style="display:inline-flex;gap:6px;align-items:center"><input id="pOverdub" type="checkbox" checked> Overdub</label>
+      <button id="pUndo" disabled>Undo take</button><button id="pClear" disabled>Clear</button>
+      <span class="grow"></span>
+      <span class="label">Latency</span><button id="pLatDn">−</button><span id="pLat" class="label" style="min-width:86px;text-align:center"></span><button id="pLatUp">+</button>
+    </div>
+    <div id="pStatus" class="foot">Headphones give the cleanest takes; with the speaker, the click is measured and ignored.</div>
+  </div>
   <section class="top">
     <div class="bar">
-      <label class="btn primary" for="file">Open song</label>
+      <label class="btn primary" for="file">Open</label>
       <input id="file" type="file" accept="audio/*,.mp3,.m4a,.wav,.aif,.aiff,.flac,.caf" hidden>
       <button id="recentBtn" aria-expanded="false">Recent</button>
       <button id="rec" title="Record from the iPad's audio input">● Record</button>
+      <button id="perfBtn" aria-expanded="false" title="Clap, tap or beatbox over a click">Perform</button>
       <span id="recMeter" class="meter hidden"><i></i></span>
       <select id="inputSel" class="hidden" aria-label="Audio input"></select>
       <span id="songTitle" class="title"></span>

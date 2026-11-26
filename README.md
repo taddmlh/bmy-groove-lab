@@ -14,6 +14,8 @@ Runs entirely in Safari (iPadOS 26+, WebGPU). Nothing is uploaded.
 
 **Song memory:** each song (audio file, grid, lock, marks, swing, hits, separated drum stems, pattern edits) is kept in IndexedDB on the iPad (`js/db.js`) and listed under Recent. **Record:** captures the current audio input via an AudioWorklet (`js/rec-worklet.js`).
 
+**Perform** (`js/perform.js`): clap, tap or beatbox over a click (tempo from Tap or Listen), 1/2/4-bar loop with count-in, passes folded and takes overdubbed; *Into lane* or *Beatbox* (teach your own kick/snare/hat sounds, nearest-fingerprint classification); round-trip latency measured from the click heard through the mic. A take becomes a song (bars marked, hits in fixed lanes) so grid, mixer, memory and export all apply.
+
 Test hook: `?nodemucs` treats the song as an already-separated drum track.
 
 ## Credits

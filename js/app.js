@@ -4,6 +4,7 @@ import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js';
 import { detectGrid, barTimes } from './beats.js';
 import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js';
 import { buildBank, bankFileName } from './bank.js';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js';
 import { loadDemucs, separateDrums } from './demucs.js';
 import { renderRegion, loadKit, audition } from './synth.js';
 import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js';
@@ -37,7 +38,7 @@ const S = {
 };
 let ort = null, actx = null;
 const TEST_NO_DEMUCS = new URLSearchParams(location.search).has('nodemucs');   // test hook: audio is already drums only
-if (TEST_NO_DEMUCS) window.GL = { S, saveNow: () => saveNow(), gridChanged: n => gridChanged(n), get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
+if (TEST_NO_DEMUCS) window.GL = { S, get P() { return P; }, saveNow: () => saveNow(), gridChanged: n => gridChanged(n), get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
 
 async function getOrt() {
   if (ort) return ort;
@@ -384,7 +385,7 @@ async function openSong({ key, name, bytes, type, buf }) {
     if (!buf) buf = await audioCtx().decodeAudioData(bytes.slice(0));
     S.locked = false;
     Object.assign(S, { key, name, dur: buf.duration, mixBuf: buf, drumBuf: null, drumMono: null, extracted: [],
-      hits: [], flux: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null, swing: { type: 'Off', depth: 0 } });
+      perf: null, hits: [], flux: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null, swing: { type: 'Off', depth: 0 } });
     S.mixMono = toMono(buf.getChannelData(0), buf.numberOfChannels > 1 ? buf.getChannelData(1) : null);
     $('songTitle').textContent = S.name; $('bankName').value = S.name;
     log(`Opened "${name}": ${buf.duration.toFixed(1)} s`);
@@ -421,7 +422,8 @@ function snapshot() {
     v: 1, grid: { ...S.grid }, locked: !!S.locked, marks: [...S.marks], tab: S.tab, swing: { ...S.swing },
     sel: S.sel && { ...S.sel }, view: { ...S.view }, mixer: S.mixer, bankName: $('bankName').value,
     extracted: S.extracted.map(r => [...r]),
-    hits: S.hits.map(h => ({ time: h.time, cls: h.cls, strength: h.strength, levelDb: h.levelDb, decay: h.decay, pitch: h.pitch })),
+    hits: S.hits.map(h => ({ time: h.time, cls: h.cls, strength: h.strength, levelDb: h.levelDb, decay: h.decay, pitch: h.pitch, ...(h.fixedLane ? { lane: h.lane, fixedLane: true } : {}) })),
+    perf: S.perf || null,
     flux: (S.flux || []).map(r => ({ a: r.a, b: r.b, f0: r.f0, frames: r.frames, data: Array.from(r.data, v => Math.round(v * 100) / 100) })),
     patterns: [...S.patterns.entries()].map(([i, p]) => [i, { cells: p.cells, hatUseAlt: p.hatUseAlt, notes: p.notes || [], edited: !!p.edited }])
   };
@@ -430,6 +432,11 @@ async function restoreState(st) {
   S.grid = { ...st.grid }; rebuildBars();
   S.locked = !!st.locked; S.marks = (st.marks || []).filter(i => i < S.bars.length);
   S.swing = st.swing || { type: 'Off', depth: 0 };
+  S.perf = st.perf || null;
+  if (S.perf) {   // keep the recorded loop as a base layer so new overdubs add to it
+    const sr = S.mixBuf.sampleRate, a0 = Math.round(0.5 * sr), n = Math.round(240 / S.perf.bpm * S.perf.bars * sr);
+    Object.assign(P, { bpm: S.perf.bpm, bars: S.perf.bars, takes: S.perf.takes.map(t => ({ ...t, audio: null })), key: S.key, name: S.name, base: S.mixMono.slice(a0, a0 + n) });
+  } else if (P.key && P.key !== S.key) Object.assign(P, { takes: [], key: null, base: null });
   S.hits = st.hits || []; S.flux = (st.flux || []).map(r => ({ ...r, data: Float32Array.from(r.data) })); S.patterns = new Map((st.patterns || []).filter(([i]) => i < S.bars.length));
   S.tab = S.patterns.has(st.tab) || S.marks.includes(st.tab) ? st.tab : (S.marks[0] ?? null);
   S.sel = st.sel || null; if (st.view) S.view = { ...st.view };
@@ -522,7 +529,7 @@ $('rec').onclick = async () => {
     src.connect(node); node.connect(mute); mute.connect(ctx.destination);
     rec = { stream, src, node, mute, chunks: [[], []], frames: 0, t0: performance.now(), peak: 0, label: (stream.getAudioTracks()[0] || {}).label || 'input' };
     node.port.onmessage = e => {
-      const ch = e.data; rec.chunks[0].push(ch[0]); rec.chunks[1].push(ch[1] || ch[0]); rec.frames += ch[0].length;
+      const ch = e.data.ch; rec.chunks[0].push(ch[0]); rec.chunks[1].push(ch[1] || ch[0]); rec.frames += ch[0].length;
       let pk = 0; for (const v of ch[0]) pk = Math.max(pk, Math.abs(v)); rec.peak = Math.max(pk, rec.peak * 0.9);
       if (rec.frames > SR * 600) stopRecording();
     };
@@ -997,6 +1004,200 @@ $('saveStem').onclick = async () => {
 };
 $('closeLog').onclick = () => { $('logBox').open = false; };
 $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($('log').textContent); $('copyLog').textContent = 'Copied'; } catch (e) { $('copyLog').textContent = 'Copy failed'; } };
+
+// ---------------------------------------------------------------- Perform: clap / tap / beatbox over a click
+const P = {
+  bpm: 100, bars: 2, mode: 'lane', lane: 'snare', overdub: true, clickVol: 0.7,
+  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null
+};
+try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { latency: st.latency ?? null, bpm: st.bpm || 100, bars: st.bars || 2, clickVol: st.clickVol ?? 0.7 });
+  if (st.sounds) P.sounds = st.sounds.map(x => ({ ...x, centroid: x.centroid && Float32Array.from(x.centroid) })); } catch (e) {}
+if (!P.sounds) P.sounds = [{ name: 'Kick', lane: 'kick' }, { name: 'Snare', lane: 'snare' }, { name: 'Hat', lane: 'closedHat' }];
+const savePerfPrefs = () => { try { localStorage.setItem('bmyGLPerform', JSON.stringify({ latency: P.latency, bpm: P.bpm, bars: P.bars, clickVol: P.clickVol,
+  sounds: P.sounds.map(x => ({ name: x.name, lane: x.lane, centroid: x.centroid ? Array.from(x.centroid) : null, n: x.n || 0 })) })); } catch (e) {} };
+const pStatus = m => { $('pStatus').textContent = m; };
+const defaultLatency = () => { const c = audioCtx(); return (c.outputLatency || 0) + (c.baseLatency || 0) + 0.015; };
+const latency = () => (P.latency ?? defaultLatency());
+
+function showPerf() {
+  $('pBpm').value = P.bpm; $('pClick').value = Math.round(P.clickVol * 100);
+  document.querySelectorAll('#pBars button').forEach(b => b.classList.toggle('on', +b.dataset.n === P.bars));
+  document.querySelectorAll('#pMode button').forEach(b => b.classList.toggle('on', b.dataset.m === P.mode));
+  $('pLane').classList.toggle('hidden', P.mode !== 'lane'); $('pTeachBox').classList.toggle('hidden', P.mode !== 'beatbox');
+  if (!$('pLane').options.length) $('pLane').innerHTML = LANES.map(l => `<option value="${l.role}">${l.name}</option>`).join('');
+  $('pLane').value = P.lane;
+  $('pSounds').innerHTML = P.sounds.map((x, i) => `<span class="sound ${x.centroid ? 'ok' : ''}"><b>${esc(x.name)}</b>
+      <select data-i="${i}" aria-label="${esc(x.name)} lane">${LANES.map(l => `<option value="${l.role}" ${l.role === x.lane ? 'selected' : ''}>${l.name}</option>`).join('')}</select>
+      <button data-teach="${i}">${x.centroid ? 'Re-teach' : 'Teach'}</button></span>`).join('');
+  $('pSounds').querySelectorAll('select').forEach(el => el.onchange = () => { P.sounds[+el.dataset.i].lane = el.value; savePerfPrefs(); });
+  $('pSounds').querySelectorAll('[data-teach]').forEach(el => el.onclick = () => teachSound(+el.dataset.teach));
+  $('pLat').textContent = `${Math.round(latency() * 1000)} ms ${P.latency === null ? '(est.)' : ''}`;
+  $('pUndo').disabled = !P.takes.length || !!P.rec; $('pClear').disabled = !P.takes.length || !!P.rec;
+}
+$('perfBtn').onclick = () => {
+  const el = $('perf');
+  if (!el.classList.contains('hidden')) { if (!P.rec) { el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
+  closeRecent(); stopPlay(); el.classList.remove('hidden'); $('perfBtn').setAttribute('aria-expanded', 'true'); showPerf();
+};
+$('pBpm').onchange = () => { P.bpm = Math.max(40, Math.min(240, +$('pBpm').value || 100)); savePerfPrefs(); };
+document.querySelectorAll('#pBars button').forEach(b => b.onclick = () => { if (P.takes.length && +b.dataset.n !== P.bars) { pStatus('Clear the takes first to change the number of bars.'); return; } P.bars = +b.dataset.n; savePerfPrefs(); showPerf(); });
+document.querySelectorAll('#pMode button').forEach(b => b.onclick = () => { P.mode = b.dataset.m; showPerf(); });
+$('pLane').onchange = () => { P.lane = $('pLane').value; };
+$('pClick').oninput = () => { P.clickVol = +$('pClick').value / 100; savePerfPrefs(); if (P.rec && P.rec.clickGain) P.rec.clickGain.gain.value = P.clickVol; };
+$('pOverdub').onchange = () => { P.overdub = $('pOverdub').checked; };
+$('pLatDn').onclick = () => { P.latency = Math.max(0, latency() - 0.005); savePerfPrefs(); showPerf(); };
+$('pLatUp').onclick = () => { P.latency = latency() + 0.005; savePerfPrefs(); showPerf(); };
+
+// Tap tempo
+$('pTap').onclick = () => {
+  const now = performance.now() / 1000;
+  P.taps = P.taps.filter(t => now - t < 2.5); P.taps.push(now);
+  if (P.taps.length >= 3) { const b = tempoFromOnsets(P.taps); if (b) { P.bpm = b; savePerfPrefs(); $('pBpm').value = b; pStatus(`Tap tempo: ${b} BPM (${P.taps.length} taps)`); } }
+  else pStatus('Keep tapping…');
+};
+
+// mic + recorder shared by Listen, Teach and takes
+async function micOpen() {
+  const ctx = audioCtx();
+  if (!P.stream || P.stream.getAudioTracks().every(t => t.readyState === 'ended')) {
+    P.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    await ctx.audioWorklet.addModule('js/rec-worklet.js');
+  }
+  const src = ctx.createMediaStreamSource(P.stream);
+  const node = new AudioWorkletNode(ctx, 'bmy-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+  const mute = ctx.createGain(); mute.gain.value = 0;
+  src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+  const r = { src, node, mute, chunks: [], frame0: null, frames: 0 };
+  node.port.onmessage = e => { if (r.frame0 === null) r.frame0 = e.data.frame; r.chunks.push(e.data.ch[0]); r.frames += e.data.ch[0].length; };
+  return r;
+}
+function micClose(r) {
+  try { r.node.port.postMessage('stop'); } catch (e) {}
+  r.src.disconnect(); r.node.disconnect(); r.mute.disconnect();
+  const mono = new Float32Array(r.frames); let o = 0; for (const c of r.chunks) { mono.set(c, o); o += c.length; }
+  return { mono, frame0: r.frame0 ?? 0 };
+}
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+async function listenFor(secs, label) {
+  const r = await micOpen(); const t0 = performance.now();
+  while ((performance.now() - t0) / 1000 < secs) { pStatus(`${label} ${Math.ceil(secs - (performance.now() - t0) / 1000)}…`); await sleep(200); }
+  return micClose(r);
+}
+$('pListen').onclick = async () => {
+  try {
+    const { mono } = await listenFor(6, 'Clap or tap quarter notes now…');
+    const on = detectOnsets(mono).filter(o => !looksLikeClick(o.feat));
+    const b = tempoFromOnsets(on.map(o => o.t));
+    if (!b) { pStatus(`Heard ${on.length} hit(s); need at least 3 steady quarter notes. Try again.`); return; }
+    P.bpm = b; savePerfPrefs(); $('pBpm').value = b; pStatus(`Listened: ${b} BPM from ${on.length} hits.`);
+  } catch (err) { pStatus('Microphone not available: ' + err.message); }
+};
+async function teachSound(i) {
+  try {
+    const sd = P.sounds[i];
+    const { mono } = await listenFor(5, `Make your ${sd.name} sound 4–6 times, with gaps…`);
+    const on = detectOnsets(mono);
+    if (on.length < 2) { pStatus(`Only heard ${on.length}. Try again, a little louder.`); return; }
+    sd.centroid = centroid(on.map(o => o.feat)); sd.n = on.length; savePerfPrefs(); showPerf();
+    // how distinct are the taught sounds?
+    const taught = P.sounds.filter(x => x.centroid);
+    let worst = ''; for (let a = 0; a < taught.length; a++) for (let b = a + 1; b < taught.length; b++) {
+      let c = 0; for (let k = 0; k < taught[a].centroid.length; k++) c += taught[a].centroid[k] * taught[b].centroid[k];
+      if (c > 0.85) worst = `${taught[a].name} and ${taught[b].name} sound very alike; make them more different.`;
+    }
+    pStatus(`Learned ${sd.name} from ${on.length} hits. ${worst}`);
+  } catch (err) { pStatus('Microphone not available: ' + err.message); }
+}
+
+// Record a take: 1 bar count-in, then loop the bars until Stop. Every pass is layered (folded) into the loop.
+$('pRec').onclick = async () => {
+  if (P.rec) return stopTake();
+  if (P.mode === 'beatbox' && !P.sounds.some(x => x.centroid)) { pStatus('Teach at least one sound first (Teach buttons).'); return; }
+  if (P.key && S.key !== P.key) Object.assign(P, { takes: [], key: null, base: null });   // a normal song is open: start a new Perform song
+  try {
+    const ctx = audioCtx(); stopPlay();
+    const r = await micOpen();
+    const beat = 60 / P.bpm, bar = 4 * beat, clicks = clickBuffers(ctx);
+    const clickGain = ctx.createGain(); clickGain.gain.value = P.clickVol; clickGain.connect(ctx.destination);
+    const t0 = ctx.currentTime + 0.4, bar1 = t0 + bar;
+    let next = 0; const sched = [];
+    const schedule = () => { while (t0 + next * beat < ctx.currentTime + 0.5) { const n = ctx.createBufferSource(); n.buffer = next % 4 === 0 ? clicks.accent : clicks.beat; n.connect(clickGain); n.start(t0 + next * beat); sched.push(t0 + next * beat); next++; } };
+    schedule();
+    P.rec = { r, t0, bar1, beat, bar, clickGain, sched, timer: setInterval(() => {
+      schedule();
+      const t = ctx.currentTime;
+      const msg = t < bar1 ? `Count-in ${4 - Math.floor((t - t0) / beat)}…` : `Recording · pass ${Math.floor((t - bar1) / (bar * P.bars)) + 1} · bar ${Math.floor(((t - bar1) % (bar * P.bars)) / bar) + 1} of ${P.bars}`;
+      $('pRec').textContent = '■ Stop'; pStatus(msg);
+    }, 100) };
+    $('pRec').classList.add('on'); showPerf();
+  } catch (err) { P.rec = null; pStatus('Could not start: ' + (err.name === 'NotAllowedError' ? 'microphone access was not allowed.' : err.message)); }
+};
+async function stopTake() {
+  const R = P.rec; P.rec = null; clearInterval(R.timer);
+  R.clickGain.disconnect();
+  $('pRec').classList.remove('on'); $('pRec').textContent = '● Record take';
+  const { mono, frame0 } = micClose(R.r);
+  const sr = audioCtx().sampleRate, tOf = i => (frame0 + i) / sr;          // recording sample -> audio clock
+  const on = detectOnsets(mono).map(o => ({ ...o, T: tOf(o.t * sr) }));
+  // latency: the count-in clicks heard back through the mic (speaker) -> round-trip delay
+  const offs = [];
+  for (let k = 0; k < 4; k++) { const ct = R.t0 + k * R.beat; const o = on.find(x => x.T - ct > -0.01 && x.T - ct < 0.3 && looksLikeClick(x.feat)); if (o) offs.push(o.T - ct); }   // only the click itself, not claps during the count-in
+  offs.sort((a, b) => a - b);
+  if (offs.length >= 3 && offs[offs.length - 1] - offs[0] < 0.02) { P.latency = offs[Math.floor(offs.length / 2)]; savePerfPrefs(); log(`Perform latency measured from the click: ${(P.latency * 1000).toFixed(0)} ms`); }
+  const lat = latency(), step = R.beat / 4, loopSteps = 16 * P.bars, loopSec = R.bar * P.bars;
+  const clickTimes = R.sched.map(t => t + lat);
+  const hits = [];
+  let clicksIgnored = 0, unsure = 0;
+  for (const o of on) {
+    const T = o.T - lat;
+    if (T < R.bar1 - step / 4) continue;                                            // count-in
+    if (clickTimes.some(c => Math.abs(o.T - c) < 0.03) && looksLikeClick(o.feat)) { clicksIgnored++; continue; }
+    let pos = (T - R.bar1) / step; pos = ((pos + 0.25) % loopSteps + loopSteps) % loopSteps - 0.25;   // fold passes into the loop
+    let lane = P.lane;
+    if (P.mode === 'beatbox') { const c = classify(o.feat, P.sounds); if (c.i < 0) continue; if (c.score < 0.5) unsure++; lane = P.sounds[c.i].lane; }
+    hits.push({ pos, lane, levelDb: o.levelDb });
+  }
+  // the take's audio, latency-corrected and folded into the loop (passes summed)
+  const loopN = Math.round(loopSec * sr), audio = new Float32Array(loopN);
+  const start = Math.round((R.bar1 + lat) * sr) - frame0;
+  for (let i = Math.max(0, start); i < mono.length; i++) audio[(i - start) % loopN] += mono[i];
+  const lanes = P.mode === 'lane' ? [P.lane] : [...new Set(P.sounds.filter(x => x.centroid).map(x => x.lane))];
+  if (!P.overdub) for (const t of P.takes) t.hits = t.hits.filter(h => !lanes.includes(h.lane));
+  P.takes.push({ id: Date.now(), hits, audio, lanes });
+  const passes = Math.max(1, Math.round((mono.length - start) / loopN));
+  pStatus(`Take ${P.takes.length}: ${hits.length} hits over ${passes} pass${passes > 1 ? 'es' : ''}${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
+  log(`Perform take: ${hits.length} hits, lanes ${lanes.join('/')}, ${P.overdub ? 'overdub' : 'replace'}`);
+  await buildPerformSong();
+}
+$('pUndo').onclick = async () => { P.takes.pop(); await buildPerformSong(); pStatus(P.takes.length ? `Undid the last take; ${P.takes.length} left.` : 'All takes undone.'); };
+$('pClear').onclick = async () => { P.takes = []; P.key = null; P.base = null; pStatus('Cleared. Record a new take (a new Perform song).'); showPerf(); };
+
+/** Turn the takes into a song: bar lines known, all bars marked, hits in fixed lanes; then the usual grid / mixer / export. */
+async function buildPerformSong() {
+  const ctx = audioCtx(), sr = ctx.sampleRate, lead = 0.5, bar = 240 / P.bpm, step = bar / 16;
+  const loopN = Math.round(bar * P.bars * sr), total = Math.round(lead * sr) + loopN + Math.round(0.5 * sr);
+  const buf = ctx.createBuffer(2, total, sr), L = buf.getChannelData(0), R = buf.getChannelData(1);
+  const layers = [P.base, ...P.takes.map(t => t.audio)].filter(Boolean);
+  for (const a of layers) for (let i = 0; i < loopN && i < a.length; i++) { const j = Math.round(lead * sr) + i; L[j] += a[i]; R[j] += a[i]; }
+  let pk = 0; for (let i = 0; i < total; i++) pk = Math.max(pk, Math.abs(L[i]));
+  if (pk > 0.98) for (let i = 0; i < total; i++) { L[i] *= 0.98 / pk; R[i] *= 0.98 / pk; }
+  if (!P.key) { const d = new Date(); P.key = 'perf-' + d.getTime(); P.name = `Perform ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; }
+  stopPlay();
+  Object.assign(S, { key: P.key, name: P.name, dur: buf.duration, mixBuf: buf, drumBuf: buf, sel: null, playhead: 0, ovPeaks: null, undo: [], flux: [], locked: true, tab: null });
+  S.mixMono = toMono(L, R); S.drumMono = S.mixMono; S.extracted = [[0, buf.duration]];
+  S.grid = { bpm: P.bpm, t0: lead }; rebuildBars();
+  const first = S.bars.findIndex(b => Math.abs(b.start - lead) < 1e-3);
+  S.marks = [...Array(Math.min(6, P.bars)).keys()].map(k => first + k);
+  S.hits = P.takes.flatMap(t => t.hits).map(h => ({ time: lead + h.pos * step, cls: 'perform', lane: h.lane, fixedLane: true, levelDb: h.levelDb, strength: 1 })).sort((a, b) => a.time - b.time);
+  S.patterns = new Map(); buildPatterns(true);
+  S.tab = S.marks[0] ?? null; S.sel = S.marks.length ? { a: S.bars[S.marks[0]].start, b: S.bars[S.marks[S.marks.length - 1]].end } : null;
+  S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (bar * P.bars + 1)); S.view.start = 0;
+  $('songTitle').textContent = S.name; $('bankName').value = S.name; setBpmField();
+  S.perf = { bpm: P.bpm, bars: P.bars, takes: P.takes.map(t => ({ id: t.id, lanes: t.lanes, hits: t.hits })) };
+  updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); showPerf();
+  try { await putFile({ key: S.key, bytes: wavBytes(buf), type: 'audio/wav' }); } catch (e) {}
+  saveNow();
+}
 
 // ---------------------------------------------------------------- start
 log('Groove Lab loaded (v1)');
