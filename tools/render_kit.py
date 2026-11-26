@@ -86,8 +86,9 @@ def lowpass(x, fc_cents, q_cb):
 def voice(sample, g, note, vel, maxlen):
     st = sample.start + g.get(0, 0) + 32768 * g.get(4, 0)
     en = sample.end + g.get(1, 0) + 32768 * g.get(12, 0)
-    ls = sample.start_loop + g.get(2, 0) + 32768 * g.get(45, 0)
-    le = sample.end_loop + g.get(3, 0) + 32768 * g.get(50, 0)
+    # sf2utils gives loop points relative to the sample's start
+    ls = sample.start + sample.start_loop + g.get(2, 0) + 32768 * g.get(45, 0)
+    le = sample.start + sample.end_loop + g.get(3, 0) + 32768 * g.get(50, 0)
     looped = g.get(54, 0) in (1, 3)
     root = g.get(58, -1); root = sample.original_pitch if root is None or root < 0 else root
     cents = (note - root) * g.get(56, 100) + g.get(51, 0) * 100 + g.get(52, 0) + sample.pitch_correction

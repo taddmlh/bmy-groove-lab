@@ -70,13 +70,14 @@ export function renderBar(ctx, pattern, swing, bpm) {
 
 // ---- BMY's built-in kit: GeneralUser GS "Standard 1", rendered per BMY velocity label (kit/kit.json)
 const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
+const KIT_VERSION = 2;   // bump when the kit is re-rendered, so browsers fetch the new samples
 let KIT = null;
 export async function loadKit(ctx, base = 'kit/') {
   if (KIT) return KIT;
-  const man = await (await fetch(base + 'kit.json')).json();
+  const man = await (await fetch(base + 'kit.json?v=' + KIT_VERSION)).json();
   const lanes = {};
   await Promise.all(Object.entries(man.notes).map(async ([lane, n]) => {
-    const buf = await ctx.decodeAudioData(await (await fetch(base + n.file)).arrayBuffer());
+    const buf = await ctx.decodeAudioData(await (await fetch(base + n.file + '?v=' + KIT_VERSION)).arrayBuffer());
     const data = buf.getChannelData(0), k = buf.sampleRate / man.sr;
     lanes[lane] = { excl: n.exclusiveClass, layers: n.layers.map(([o, l]) => data.subarray(Math.round(o * k), Math.round((o + l) * k))) };
   }));
