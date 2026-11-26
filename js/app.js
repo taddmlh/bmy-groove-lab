@@ -442,7 +442,14 @@ async function restoreState(st) {
   S.sel = st.sel || null; if (st.view) S.view = { ...st.view };
   if (st.bankName) $('bankName').value = st.bankName;
   const stems = await getStems(S.key).catch(() => null);
-  if (stems && stems.regions && stems.regions.length) {
+  if (S.perf) {                     // Perform song: the recording is the drums; layers' audio kept separately for Undo layer
+    S.drumBuf = S.mixBuf; S.drumMono = S.mixMono; S.extracted = [[0, S.dur]];
+    if (stems && stems.perfTakes) {
+      const byId = new Map(stems.perfTakes.map(t => [t.id, t.audio]));
+      P.takes.forEach(t => { t.audio = byId.get(t.id) || null; });
+      P.base = stems.perfBase || (P.takes.every(t => t.audio) ? null : P.base);
+    }
+  } else if (stems && stems.regions && stems.regions.length) {
     S.drumBuf = audioCtx().createBuffer(2, S.mixBuf.length, SR); S.drumMono = new Float32Array(S.mixBuf.length);
     for (const r of stems.regions) {
       const s0 = Math.floor(r.a * SR);
@@ -1044,7 +1051,6 @@ document.querySelectorAll('#pBars button').forEach(b => b.onclick = () => { if (
 document.querySelectorAll('#pMode button').forEach(b => b.onclick = () => { P.mode = b.dataset.m; showPerf(); });
 $('pLane').onchange = () => { P.lane = $('pLane').value; };
 $('pClick').oninput = () => { P.clickVol = +$('pClick').value / 100; savePerfPrefs(); if (P.clock) P.clock.gain.gain.value = P.clickVol; };
-$('pOverdub').onchange = () => { P.overdub = $('pOverdub').checked; };
 $('pLatDn').onclick = () => { P.latency = Math.max(0, latency() - 0.005); savePerfPrefs(); showPerf(); };
 $('pLatUp').onclick = () => { P.latency = latency() + 0.005; savePerfPrefs(); showPerf(); };
 
@@ -1180,15 +1186,20 @@ async function stopTake() {
   const start = Math.round((R.bar1 + lat) * sr) - frame0;
   for (let i = Math.max(0, start); i < mono.length; i++) audio[(i - start) % loopN] += mono[i];
   const lanes = P.mode === 'lane' ? [P.lane] : [...new Set(P.sounds.filter(x => x.centroid).map(x => x.lane))];
-  if (!P.overdub) for (const t of P.takes) t.hits = t.hits.filter(h => !lanes.includes(h.lane));
   P.takes.push({ id: Date.now(), hits, audio, lanes });
   const passes = Math.max(1, Math.round((mono.length - start) / loopN));
-  pStatus(`Take ${P.takes.length}: ${hits.length} hits over ${passes} pass${passes > 1 ? 'es' : ''}${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
-  log(`Perform take: ${hits.length} hits, lanes ${lanes.join('/')}, ${P.overdub ? 'overdub' : 'replace'}`);
+  pStatus(`Layer ${P.takes.length}: ${hits.length} hits over ${passes} pass${passes > 1 ? 'es' : ''}${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
+  log(`Perform layer ${P.takes.length}: ${hits.length} hits, lanes ${lanes.join('/')}`);
   await buildPerformSong();
 }
-$('pUndo').onclick = async () => { P.takes.pop(); await buildPerformSong(); pStatus(P.takes.length ? `Undid the last take; ${P.takes.length} left.` : 'All takes undone.'); };
-$('pClear').onclick = async () => { P.takes = []; P.key = null; P.base = null; pStatus('Cleared. Record a new take (a new Perform song).'); showPerf(); };
+$('pUndo').onclick = async () => {
+  if (P.rec) return;
+  P.takes.pop();
+  if (!P.takes.length && !P.base) stopClock();      // nothing left: stop the click too
+  await buildPerformSong();
+  pStatus(P.takes.length ? `Removed the last layer; ${P.takes.length} left. The click keeps going: tap Record to redo it.` : 'All layers removed; click stopped.');
+};
+$('pClear').onclick = async () => { if (P.rec) return; stopClock(); P.takes = []; P.key = null; P.base = null; pStatus('Cleared; click stopped. Record a new take to start a new Perform song.'); showPerf(); };
 
 /** Turn the takes into a song: bar lines known, all bars marked, hits in fixed lanes; then the usual grid / mixer / export. */
 async function buildPerformSong() {
@@ -1214,6 +1225,7 @@ async function buildPerformSong() {
   S.perf = { bpm: P.bpm, bars: P.bars, takes: P.takes.map(t => ({ id: t.id, lanes: t.lanes, hits: t.hits })) };
   updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); showPerf();
   try { await putFile({ key: S.key, bytes: wavBytes(buf), type: 'audio/wav' }); } catch (e) {}
+  try { await putStems({ key: S.key, regions: [], perfTakes: P.takes.filter(t => t.audio).map(t => ({ id: t.id, audio: t.audio })), perfBase: P.base || null }); } catch (e) {}
   saveNow();
 }
 
