@@ -1,15 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127a';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127a';
-import { detectGrid, barTimes } from './beats.js?b=20261127a';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127a';
-import { buildBank, bankFileName } from './bank.js?b=20261127a';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127a';
-import { oafHits, loadOaf } from './oaf.js?b=20261127a';
-import { denoise } from './denoise.js?b=20261127a';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127a';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127a';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127a';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127b';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127b';
+import { detectGrid, barTimes } from './beats.js?b=20261127b';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127b';
+import { buildBank, bankFileName } from './bank.js?b=20261127b';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127b';
+import { oafHits, loadOaf } from './oaf.js?b=20261127b';
+import { bmytHits, loadBmyt, bmytAvailable } from './bmyt.js?b=20261127b';
+import { denoise } from './denoise.js?b=20261127b';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127b';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127b';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127b';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -897,7 +898,8 @@ function doubleStrokes(bars) {
 }
 async function transcribeRegion(o, a, b) {
   crumb('transcribing');
-  if (transcriber() === 'oaf') await loadOaf(o, 'models/oaf_drums.onnx'); else await loadAdtof(o, 'models/adtof.onnx');
+  const model = transcriber();
+  if (model === 'oaf') await loadOaf(o, 'models/oaf_drums.onnx'); else if (model === 'bmy') await loadBmyt(o, 'models/bmy_drums.onnx'); else await loadAdtof(o, 'models/adtof.onnx');
   const s0 = Math.floor(a * SR), s1 = Math.min(S.drumMono.length, Math.floor(b * SR));
   // normalise the stem to -1 dBFS peak (max +30 dB) for detection only; playback and velocities are unaffected
   const raw = S.drumMono.subarray(s0, s1);
@@ -907,7 +909,11 @@ async function transcribeRegion(o, a, b) {
   log(`Stem ${a.toFixed(1)}–${b.toFixed(1)} s peaked at ${(20 * Math.log10(peak || 1e-9)).toFixed(1)} dBFS; normalised by ${(20 * Math.log10(gain)).toFixed(1)} dB for transcription`);
   const spec = logSpec(mono);
   let hits;
-  if (transcriber() === 'oaf') {          // Magenta OaF Drums (licence-friendly candidate for BMY)
+  if (model === 'bmy') {                  // BMY's own model (training/)
+    const t = performance.now();
+    hits = (await bmytHits(o, mono)).map(h => ({ ...h, time: h.time + s0 / SR }));
+    log(`BMY transcriber: ${hits.length} hits in ${((performance.now() - t) / 1000).toFixed(1)} s`);
+  } else if (model === 'oaf') {          // Magenta OaF Drums (licence-friendly candidate for BMY)
     const t = performance.now();
     hits = (await oafHits(o, mono)).map(h => ({ ...h, time: h.time + s0 / SR }));
     const fixed = hits.filter(h => h.fromSnare).length;
@@ -1568,7 +1574,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27a';
+const BUILD = '2026-11-27b';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 // ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -1585,11 +1591,16 @@ $('installBtn').onclick = async () => {
 addEventListener('appinstalled', () => { $('installBtn').classList.add('hidden'); log('Installed'); });
 
 // transcriber: ADTOF (personal use only) or Magenta OaF Drums (candidate for BMY); remembered on this device
-const transcriber = () => { try { return localStorage.getItem('bmyGLModel') === 'oaf' ? 'oaf' : 'adtof'; } catch (e) { return 'adtof'; } };
+let bmyModel = false;
+const transcriber = () => { let m = 'adtof'; try { m = localStorage.getItem('bmyGLModel') || 'adtof'; } catch (e) {} return m === 'bmy' && !bmyModel ? 'adtof' : ['adtof', 'oaf', 'bmy'].includes(m) ? m : 'adtof'; };
 $('modelSel').value = transcriber();
+bmytAvailable().then(ok => {                // BMY's own model appears once models/bmy_drums.onnx is in place
+  bmyModel = ok;
+  if (ok) { const o = document.createElement('option'); o.value = 'bmy'; o.textContent = 'BMY'; $('modelSel').appendChild(o); $('modelSel').value = transcriber(); }
+});
 $('modelSel').onchange = () => {
   try { localStorage.setItem('bmyGLModel', $('modelSel').value); } catch (e) {}
-  const name = $('modelSel').value === 'oaf' ? 'Magenta' : 'ADTOF';
+  const name = { oaf: 'Magenta', bmy: 'BMY', adtof: 'ADTOF' }[$('modelSel').value];
   log('Transcriber: ' + name);
   if (S.extracted && S.extracted.length && !busy) { status(`Transcribing again with ${name}…`); $('extract').click(); }
   else status(`Transcriber: ${name}. It's used the next time you Extract.`);

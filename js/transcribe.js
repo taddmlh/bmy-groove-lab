@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127a';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127b';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
@@ -94,8 +94,8 @@ export function assignLanes(hits, bars) {
     if (h.fixedLane) continue;                // Perform: the lane was chosen (lane mode) or taught (beatbox)
     if (h.cls === 'kick') h.lane = 'kick';
     else if (h.cls === 'snare') h.lane = 'snare';
-    else if (h.cls === 'tom') h.lane = tm.get(Math.round(h.pitch)) || 'tomMid';
-    else if (h.cls === 'hihat') h.lane = h.decay > 0.2 ? 'openHat' : 'closedHat';
+    else if (h.cls === 'tom') h.lane = h.modelLane || tm.get(Math.round(h.pitch)) || 'tomMid';          // BMY's model names the tom
+    else if (h.cls === 'hihat') h.lane = h.open !== undefined ? (h.open ? 'openHat' : 'closedHat') : h.decay > 0.2 ? 'openHat' : 'closedHat';
     else if (h.cls === 'cymbal') h.lane = h.kind || 'crash';      // Magenta tells ride from crash; ADTOF doesn't
   }
   // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
