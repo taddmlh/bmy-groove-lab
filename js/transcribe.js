@@ -84,7 +84,7 @@ export function assignLanes(hits, bars) {
   }
   // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
   for (const bar of bars) {
-    const cy = hits.filter(h => h.cls === 'cymbal' && h.time >= bar.start - bar.step / 2 && h.time < bar.end - bar.step / 2);
+    const cy = hits.filter(h => h.cls === 'cymbal' && h.time >= bar.start - bar.step / 4 && h.time < bar.end - bar.step / 4);
     if (cy.length >= 3) cy.forEach(h => { h.lane = 'ride'; });
   }
   // Velocity: loudness against the median of the same instrument across the marked bars.
@@ -112,7 +112,7 @@ export function detectSwing(hits, bars) {
   const qs = [];
   for (const bar of bars) for (const h of hits) {
     const p = (h.time - bar.start) / bar.step;
-    if (p < -0.5 || p >= 15.5) continue;
+    if (p < -0.25 || p >= 15.75) continue;
     qs.push(((p % 4) + 4) % 4 > 3.5 ? ((p % 4) + 4) % 4 - 4 : ((p % 4) + 4) % 4);
   }
   if (qs.length < 4) return { type: 'Off', depth: 0 };
@@ -131,11 +131,12 @@ export function detectSwing(hits, bars) {
 const TRIP4 = [0, 4 / 3, 8 / 3], TRIP8 = [0, 2 / 3, 4 / 3];
 const SPANS = { t4: 4, t8: 2, t16: 1, double: 1, flam: 1 };
 
-/** bar: {start, end, step}. Returns {cells, hatUseAlt, notes:[]}. */
+/** bar: {start, end, step}. A hit belongs to this bar from 1/4 step before its downbeat to 1/4 step before the next
+ * (so a 32nd stroke at 15.5 stays here, an early downbeat at 15.8 goes to the next bar). Returns {cells, hatUseAlt, notes:[]}. */
 export function barToPattern(hits, bar, swing) {
   const sw = { type: swing.type, depth: swing.depth / 100 };
   const grid = gridFor(sw);
-  const inBar = hits.filter(h => h.time >= bar.start - bar.step / 2 && h.time < bar.end - bar.step / 2)
+  const inBar = hits.filter(h => h.time >= bar.start - bar.step / 4 && h.time < bar.end - bar.step / 4)
     .map(h => ({ ...h, p: (h.time - bar.start) / bar.step }));
   const notes = [];
   const rideBar = inBar.filter(h => h.lane === 'ride').length >= 3;
@@ -196,8 +197,8 @@ export function barToPattern(hits, bar, swing) {
       for (const x of qs) {
         if (x.used) continue;
         const n = nearest(x.q, grid);
-        const step = beat * 4 + n.i;
-        if (step < 0 || step > 15) continue;
+        const step = Math.min(15, beat * 4 + n.i);   // a lone hit in 15.5-15.75 stays on 15 (the next bar starts at 15.75)
+        if (step < 0) continue;
         if (cells.some(c => c.lane === lane && c.ornament && SPANS[c.ornament] > 1 && step >= c.step && step < c.step + SPANS[c.ornament])) continue;
         const c = { lane, step, velocity: x.h.vel, tripletPattern: '111' };
         if (x.orn) c.ornament = x.orn;

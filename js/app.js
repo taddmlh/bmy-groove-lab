@@ -37,7 +37,7 @@ const S = {
 };
 let ort = null, actx = null;
 const TEST_NO_DEMUCS = new URLSearchParams(location.search).has('nodemucs');   // test hook: audio is already drums only
-if (TEST_NO_DEMUCS) window.GL = { S, saveNow: () => saveNow(), get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
+if (TEST_NO_DEMUCS) window.GL = { S, saveNow: () => saveNow(), gridChanged: n => gridChanged(n), get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
 
 async function getOrt() {
   if (ort) return ort;
@@ -682,7 +682,7 @@ const FLUX_BANDS = Object.fromEntries(Object.entries({ kick: [30, 150], snare: [
 function doubleStrokes(bars) {
   const out = [];
   for (const h of S.hits) {
-    const b = bars.find(x => h.time >= x.start - x.step / 2 && h.time < x.end - x.step / 2); if (!b) continue;
+    const b = bars.find(x => h.time >= x.start - x.step / 4 && h.time < x.end - x.step / 4); if (!b) continue;
     if (!['snare', 'tom'].includes(h.cls)) continue;   // kick ring and hats/cymbals give false doubles
     const c = CLASSES.indexOf(h.cls), fr = (S.flux || []).find(r => h.time >= r.a && h.time < r.b); if (c < 0 || !fr) continue;
     const at = t => Math.round(t * FPS) - fr.f0, val = f => (f > 0 && f < fr.frames ? fr.data[f * 5 + c] : 0);
@@ -736,7 +736,7 @@ function buildPatterns(force) {
     if (old && old.edited && !force) continue;
     S.patterns.set(b.i, { ...barToPattern(all, b, S.swing), edited: false });
     // what was heard in this bar, in steps (for checking against the grid)
-    const inBar = all.filter(h => h.time >= b.start - b.step / 2 && h.time < b.end - b.step / 2)
+    const inBar = all.filter(h => h.time >= b.start - b.step / 4 && h.time < b.end - b.step / 4)
       .map(h => `${((h.time - b.start) / b.step).toFixed(2)} ${h.lane}${h.ghost ? '(ghost)' : ''} ${h.vel}`);
     log(`Bar ${barNo(b.i)} hits [step lane vel]: ` + inBar.join(', '));
   }
