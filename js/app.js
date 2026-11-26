@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126o';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126o';
-import { detectGrid, barTimes } from './beats.js?b=20261126o';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126o';
-import { buildBank, bankFileName } from './bank.js?b=20261126o';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126o';
-import { denoise } from './denoise.js?b=20261126o';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126o';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126o';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126o';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126p';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126p';
+import { detectGrid, barTimes } from './beats.js?b=20261126p';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126p';
+import { buildBank, bankFileName } from './bank.js?b=20261126p';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126p';
+import { denoise } from './denoise.js?b=20261126p';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126p';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126p';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126p';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1156,8 +1156,10 @@ $('export').onclick = async () => {
     const bank = buildBank({ name: $('bankName').value || S.name, patterns: pats, swing: S.swing, bpm: S.grid.bpm });
     const json = JSON.stringify(bank, null, 2);
     const fname = bankFileName(bank);
-    const file = new File([json], fname, { type: 'application/octet-stream' });
-    log(`Exported "${fname}": ${pats.length} patterns, ${pats.reduce((n, p) => n + p.cells.length, 0)} cells, ${bank.tempo ? bank.tempo.bpm + ' BPM' : 'no tempo'}`);
+    // BMY declares com.taddm.bmybank with MIME application/x-bmybank: using that type lets iOS offer BMY Drummer in the share sheet
+    let file = new File([json], fname, { type: 'application/x-bmybank' });
+    if (navigator.canShare && !navigator.canShare({ files: [file] })) { file = new File([json], fname, { type: 'application/octet-stream' }); log('Share: x-bmybank not accepted, using a generic file type'); }
+    log(`Exported "${fname}" (${file.type}): ${pats.length} patterns, ${pats.reduce((n, p) => n + p.cells.length, 0)} cells, ${bank.tempo ? bank.tempo.bpm + ' BPM' : 'no tempo'}`);
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try { await navigator.share({ files: [file], title: fname }); status(`Shared ${fname}. In the share sheet, choose BMY Drummer (or Save to Files).`); return; }
       catch (e) { if (e.name === 'AbortError') return; log('Share failed, downloading instead: ' + e.message); }
@@ -1505,7 +1507,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26o';
+const BUILD = '2026-11-26p';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
