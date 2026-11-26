@@ -110,16 +110,16 @@ function drawBarShading(g, w, h, dpr, viewEnd) {
     }
   }
 }
-function drawOverlays(g, w, h, dpr) {
+function drawOverlays(g, w, h, dpr, grips) {
   if (S.sel) {
     const x0 = tToX(S.sel.a, w, dpr), x1 = tToX(S.sel.b, w, dpr);
     g.fillStyle = 'rgba(255,173,20,.16)'; g.fillRect(x0, 0, x1 - x0, h);
-    g.fillStyle = '#ffad14'; g.fillRect(x0, 0, 2 * dpr, h); g.fillRect(x1 - 2 * dpr, 0, 2 * dpr, h);
-    if (selIsBars()) {
-      const hh = Math.min(h * 0.5, 34 * dpr), y = (h - hh) / 2, hw = 10 * dpr;
-      g.fillRect(x0, y, hw, hh); g.fillRect(x1 - hw, y, hw, hh);
+    g.fillStyle = '#ffad14'; g.fillRect(x0, 0, (grips ? 2 : 1.5) * dpr, h); g.fillRect(x1 - (grips ? 2 : 1.5) * dpr, 0, (grips ? 2 : 1.5) * dpr, h);
+    if (grips && selIsBars()) {
+      const hw = 14 * dpr;
+      g.fillRect(x0, 0, hw, h); g.fillRect(x1 - hw, 0, hw, h);
       g.fillStyle = '#000';
-      for (const x of [x0 + 3 * dpr, x1 - 7 * dpr]) { g.fillRect(x, y + hh * 0.3, dpr, hh * 0.4); g.fillRect(x + 3 * dpr, y + hh * 0.3, dpr, hh * 0.4); }
+      for (const x of [x0 + 4 * dpr, x1 - 10 * dpr]) { g.fillRect(x, h * 0.3, dpr, h * 0.4); g.fillRect(x + 4 * dpr, h * 0.3, dpr, h * 0.4); }
     }
   }
   const px = tToX(S.playhead, w, dpr);
@@ -143,17 +143,19 @@ function drawRuler() {
     const m = S.marks.indexOf(b.i);
     if (m >= 0) {
       g.fillStyle = b.i === S.tab ? '#1b6f8c' : '#0f3a4a'; g.fillRect(x0 + dpr, 2 * dpr, x1 - x0 - 2 * dpr, h - 4 * dpr);
-      g.fillStyle = '#26c7ff'; g.beginPath(); g.arc(x0 + 12 * dpr, h / 2, 8 * dpr, 0, 7); g.fill();
-      g.fillStyle = '#000'; g.textAlign = 'center'; g.fillText(`${m + 1}`, x0 + 12 * dpr, h / 2 + dpr); g.textAlign = 'left';
+      const gx = selIsBars() && Math.abs(S.sel.a - b.start) < 1e-6 ? 14 * dpr : 0;
+      g.fillStyle = '#26c7ff'; g.beginPath(); g.arc(x0 + gx + 12 * dpr, h / 2, 8 * dpr, 0, 7); g.fill();
+      g.fillStyle = '#000'; g.textAlign = 'center'; g.fillText(`${m + 1}`, x0 + gx + 12 * dpr, h / 2 + dpr); g.textAlign = 'left';
     }
     g.fillStyle = '#3a3f4c'; g.fillRect(Math.round(x0), 0, Math.max(1, dpr), h);
     if (barNo(b.i) % every === 0 || m >= 0) {
       g.fillStyle = m >= 0 ? '#e9f8ff' : '#8d929e';
       const label = `${barNo(b.i)}`;
-      g.fillText(label, m >= 0 ? x0 + 25 * dpr : x0 + 5 * dpr, h / 2);
+      const off = (selIsBars() && Math.abs(S.sel.a - b.start) < 1e-6 ? 14 * dpr : 0) + (m >= 0 ? 25 * dpr : 5 * dpr);
+      g.fillText(label, x0 + off, h / 2);
     }
   }
-  drawOverlays(g, w, h, dpr);
+  drawOverlays(g, w, h, dpr, true);
 }
 function drawOverview() {
   const c = $('overview'), { w, h, dpr } = canvasSize(c), g = c.getContext('2d');
@@ -194,46 +196,108 @@ function clampView() {
 window.addEventListener('resize', () => { S.ovPeaks = null; redraw(); renderGrid(); });
 
 // ---------------------------------------------------------------- pointer handling (timeline)
+const multi = { pts: new Map(), used: false, snap: null, last: null };   // two-finger scroll / pinch on the timeline
 function pointerDrag(el, { down, move, up }) {
   let st = null;
-  el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); const r = el.getBoundingClientRect(); st = { x0: e.clientX, x: e.clientX - r.left, moved: false, r }; down && down(st, e); });
-  el.addEventListener('pointermove', e => { if (!st) return; const dx = e.clientX - st.x0; if (Math.abs(dx) > 8) st.moved = true; st.dx = dx; st.x = e.clientX - st.r.left; move && move(st, e); });
-  const end = e => { if (!st) return; up && up(st, e); st = null; };
+  el.addEventListener('pointerdown', e => {
+    if (multi.used || multi.pts.size > 1) { st = null; return; }
+    el.setPointerCapture(e.pointerId); const r = el.getBoundingClientRect(); st = { x0: e.clientX, x: e.clientX - r.left, moved: false, r, id: e.pointerId }; down && down(st, e);
+  });
+  el.addEventListener('pointermove', e => {
+    if (!st || e.pointerId !== st.id) return;
+    if (multi.used) { st = null; return; }
+    const dx = e.clientX - st.x0; if (Math.abs(dx) > 8) st.moved = true; st.dx = dx; st.x = e.clientX - st.r.left; move && move(st, e);
+  });
+  const end = e => { if (!st || e.pointerId !== st.id) return; const s0 = st; st = null; if (!multi.used) up && up(s0, e); };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
 }
-// Ruler: tap = mark/unmark bar; drag = scroll
+{
+  const det = $('detail');
+  const centroid = () => { const p = [...multi.pts.values()]; return { x: (p[0].x + p[1].x) / 2, d: Math.max(20, Math.abs(p[0].x - p[1].x)) }; };
+  det.addEventListener('pointerdown', e => {
+    multi.pts.set(e.pointerId, { x: e.clientX - det.getBoundingClientRect().left });
+    if (multi.pts.size === 1) multi.snap = { sel: S.sel && { ...S.sel }, grid: S.grid && { ...S.grid }, playhead: S.playhead };
+    if (multi.pts.size === 2 && S.dur) {
+      multi.used = true;
+      // undo whatever the first finger started
+      const sn = multi.snap;
+      if (sn && S.grid && (sn.grid.t0 !== S.grid.t0 || sn.grid.bpm !== S.grid.bpm)) { Object.assign(S.grid, sn.grid); gridChanged(null, true); }
+      if (sn) { S.sel = sn.sel; S.playhead = sn.playhead; }
+      multi.last = centroid(); redraw();
+    }
+  }, true);
+  det.addEventListener('pointermove', e => {
+    if (!multi.pts.has(e.pointerId)) return;
+    multi.pts.get(e.pointerId).x = e.clientX - det.getBoundingClientRect().left;
+    if (!multi.used || multi.pts.size < 2) return;
+    const c = centroid(), l = multi.last;
+    const tAtC = S.view.start + l.x / S.view.pps;                         // time under the fingers
+    S.view.pps = Math.max(4, Math.min(800, S.view.pps * c.d / l.d));      // pinch
+    S.view.start = tAtC - c.x / S.view.pps;                               // pan, keeping that time under the fingers
+    clampView(); multi.last = c; redraw();
+  }, true);
+  const lift = e => {
+    multi.pts.delete(e.pointerId);
+    if (multi.pts.size === 1 && multi.used) multi.last = null;
+    if (multi.pts.size === 0) setTimeout(() => { if (!multi.pts.size) multi.used = false; }, 0);
+  };
+  det.addEventListener('pointerup', lift, true); det.addEventListener('pointercancel', lift, true);
+  // trackpad / mouse wheel: scroll sideways, pinch or ctrl+wheel to zoom
+  det.addEventListener('wheel', e => {
+    if (!S.dur) return;
+    e.preventDefault();
+    if (e.ctrlKey) {
+      const x = e.clientX - det.getBoundingClientRect().left, t = S.view.start + x / S.view.pps;
+      S.view.pps = Math.max(4, Math.min(800, S.view.pps * Math.exp(-e.deltaY * 0.01)));
+      S.view.start = t - x / S.view.pps;
+    } else S.view.start += (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) / S.view.pps;
+    clampView(); redraw();
+  }, { passive: false });
+}
+function handleHit(st) {          // grab the start or end of a bar-aligned selection
+  if (!S.grid || !selIsBars()) return false;
+  const xa = (S.sel.a - S.view.start) * S.view.pps, xb = (S.sel.b - S.view.start) * S.view.pps;
+  const n = Math.round((S.sel.b - S.sel.a) / barSec());
+  if (Math.abs(st.x - xa) < 22) { Object.assign(st, { mode: 'start', a0: S.sel.a, n }); return true; }
+  if (Math.abs(st.x - xb) < 22) { Object.assign(st, { mode: 'end', a0: S.sel.a, n }); return true; }
+  return false;
+}
+function handleMove(st) {
+  if (st.mode === 'start') {          // slide every bar line, tempo unchanged
+    const a = Math.max(-barSec(), Math.min(S.dur, xToT(st.x)));
+    S.grid.t0 = a; S.sel = { a, b: a + st.n * barSec() };
+    gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; redraw(); syncPlayback(true);
+    status(`Bar start ${a.toFixed(3)} s — release to re-transcribe`);
+  } else {                            // stretch: start stays, tempo follows the end
+    const b = xToT(st.x), len = Math.max(0.2, b - st.a0) / st.n;
+    S.grid.bpm = Math.max(30, Math.min(300, Math.round(240 / len * 100) / 100)); S.grid.t0 = st.a0;
+    gridChanged(null, true); S.sel = { a: st.a0, b: st.a0 + st.n * barSec() }; redraw(); syncPlayback(true);
+    status(`${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
+  }
+}
+function handleUp(st) {
+  gridChanged(st.mode === 'start' ? 'Bar lines moved. Drag the right edge to set the tempo.' : `Tempo set to ${S.grid.bpm.toFixed(2)} BPM.`);
+}
+// Ruler: tap = mark/unmark bar; drag = scroll; drag a grip = move the bar start / set the tempo
 pointerDrag($('ruler'), {
-  down: st => { st.v0 = S.view.start; },
-  move: st => { if (!S.grid || !st.moved) return; S.view.start = st.v0 - st.dx / S.view.pps; clampView(); redraw(); },
-  up: st => { if (!S.grid || st.moved) return; toggleMark(barAt(xToT(st.x))); }
+  down: st => { st.v0 = S.view.start; st.mode = 'pan'; handleHit(st); },
+  move: st => {
+    if (!S.grid || !st.moved) return;
+    if (st.mode !== 'pan') return handleMove(st);
+    S.view.start = st.v0 - st.dx / S.view.pps; clampView(); redraw();
+  },
+  up: st => {
+    if (!S.grid) return;
+    if (st.moved) { if (st.mode !== 'pan') handleUp(st); return; }
+    toggleMark(barAt(xToT(st.x)));
+  }
 });
 // Waveforms: tap = select that bar (and move playhead); drag = select a range, snapped to bars
 for (const id of ['wMix', 'wDrums']) pointerDrag($(id), {
-  down: st => {
-    st.t0 = xToT(st.x); st.mode = 'select';
-    if (S.grid && selIsBars()) {
-      const xa = (S.sel.a - S.view.start) * S.view.pps, xb = (S.sel.b - S.view.start) * S.view.pps;
-      const n = Math.round((S.sel.b - S.sel.a) / barSec());
-      if (Math.abs(st.x - xa) < 22) Object.assign(st, { mode: 'start', a0: S.sel.a, n });
-      else if (Math.abs(st.x - xb) < 22) Object.assign(st, { mode: 'end', a0: S.sel.a, n });
-    }
-  },
+  down: st => { st.t0 = xToT(st.x); st.mode = 'select'; handleHit(st); },
   move: st => {
     if (!S.grid || !st.moved) return;
-    if (st.mode === 'start') {          // slide every bar line, tempo unchanged
-      const a = Math.max(-barSec(), Math.min(S.dur, xToT(st.x)));
-      S.grid.t0 = a; S.sel = { a, b: a + st.n * barSec() };
-      gridChanged(null, true); S.sel = { a, b: a + st.n * barSec() }; redraw(); syncPlayback(true);
-      status(`Bar start ${a.toFixed(3)} s — release to re-transcribe`);
-      return;
-    }
-    if (st.mode === 'end') {            // stretch: start stays, tempo follows the end
-      const b = xToT(st.x), len = Math.max(0.2, b - st.a0) / st.n;
-      S.grid.bpm = Math.max(30, Math.min(300, Math.round(240 / len * 100) / 100)); S.grid.t0 = st.a0;
-      gridChanged(null, true); S.sel = { a: st.a0, b: st.a0 + st.n * barSec() }; redraw(); syncPlayback(true);
-      status(`${S.grid.bpm.toFixed(2)} BPM — release to re-transcribe`);
-      return;
-    }
+    if (st.mode !== 'select') return handleMove(st);
     const a = Math.min(st.t0, xToT(st.x)), b = Math.max(st.t0, xToT(st.x));
     const ba = barAt(a), bb = barAt(b);
     S.sel = ba >= 0 && bb >= 0 ? { a: S.bars[ba].start, b: S.bars[bb].end } : { a: Math.max(0, a), b: Math.min(S.dur, b) };
@@ -241,10 +305,7 @@ for (const id of ['wMix', 'wDrums']) pointerDrag($(id), {
     redraw();
   },
   up: st => {
-    if (S.grid && st.moved && (st.mode === 'start' || st.mode === 'end')) {
-      gridChanged(st.mode === 'start' ? 'Bar lines moved. Drag the right edge to set the tempo.' : `Tempo set to ${S.grid.bpm.toFixed(2)} BPM.`);
-      return;
-    }
+    if (S.grid && st.moved && st.mode !== 'select') { handleUp(st); return; }
     if (S.grid && st.moved) { syncPlayback(); return; }
     if (!S.grid || st.moved) return;
     const t = xToT(st.x), i = barAt(t);
@@ -330,7 +391,7 @@ $('file').addEventListener('change', async e => {
     S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (barSec() * 12));
     S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
     crumbDone();
-    status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange edges of the selected bar (left edge = bar start, right edge = tempo). Then tap bar numbers to mark up to 6 bars.`, 1);
+    status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
   } catch (err) {
     crumbDone(); status('Could not open that file: ' + err.message); log('ERROR ' + (err.stack || err));
   } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); }
