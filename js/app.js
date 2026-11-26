@@ -925,7 +925,7 @@ function syncPlayback(live) {
   startPlay(outside ? a : posNow);
 }
 $('loop').onclick = () => { S.loop = !S.loop; $('loop').classList.toggle('on', S.loop); if (playing) startPlay(posNow); };
-$('play').onclick = () => (playing ? stopPlay() : startPlay());
+$('play').onclick = () => { if (!playing && P.clock && !P.rec) stopClock(); return playing ? stopPlay() : startPlay(); };
 function stopPlay() {
   killNodes(); playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶︎ Play';
 }
@@ -1008,7 +1008,7 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 // ---------------------------------------------------------------- Perform: clap / tap / beatbox over a click
 const P = {
   bpm: 100, bars: 2, mode: 'lane', lane: 'snare', overdub: true, clickVol: 0.7,
-  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null
+  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null, clock: null
 };
 try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { latency: st.latency ?? null, bpm: st.bpm || 100, bars: st.bars || 2, clickVol: st.clickVol ?? 0.7 });
   if (st.sounds) P.sounds = st.sounds.map(x => ({ ...x, centroid: x.centroid && Float32Array.from(x.centroid) })); } catch (e) {}
@@ -1036,14 +1036,14 @@ function showPerf() {
 }
 $('perfBtn').onclick = () => {
   const el = $('perf');
-  if (!el.classList.contains('hidden')) { if (!P.rec) { el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
+  if (!el.classList.contains('hidden')) { if (!P.rec) { stopClock(); el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
   closeRecent(); stopPlay(); el.classList.remove('hidden'); $('perfBtn').setAttribute('aria-expanded', 'true'); showPerf();
 };
-$('pBpm').onchange = () => { P.bpm = Math.max(40, Math.min(240, +$('pBpm').value || 100)); savePerfPrefs(); };
+$('pBpm').onchange = () => { P.bpm = Math.max(40, Math.min(240, +$('pBpm').value || 100)); savePerfPrefs(); if (P.clock && !P.rec) { stopClock(); startClock(); } };
 document.querySelectorAll('#pBars button').forEach(b => b.onclick = () => { if (P.takes.length && +b.dataset.n !== P.bars) { pStatus('Clear the takes first to change the number of bars.'); return; } P.bars = +b.dataset.n; savePerfPrefs(); showPerf(); });
 document.querySelectorAll('#pMode button').forEach(b => b.onclick = () => { P.mode = b.dataset.m; showPerf(); });
 $('pLane').onchange = () => { P.lane = $('pLane').value; };
-$('pClick').oninput = () => { P.clickVol = +$('pClick').value / 100; savePerfPrefs(); if (P.rec && P.rec.clickGain) P.rec.clickGain.gain.value = P.clickVol; };
+$('pClick').oninput = () => { P.clickVol = +$('pClick').value / 100; savePerfPrefs(); if (P.clock) P.clock.gain.gain.value = P.clickVol; };
 $('pOverdub').onchange = () => { P.overdub = $('pOverdub').checked; };
 $('pLatDn').onclick = () => { P.latency = Math.max(0, latency() - 0.005); savePerfPrefs(); showPerf(); };
 $('pLatUp').onclick = () => { P.latency = latency() + 0.005; savePerfPrefs(); showPerf(); };
@@ -1052,7 +1052,7 @@ $('pLatUp').onclick = () => { P.latency = latency() + 0.005; savePerfPrefs(); sh
 $('pTap').onclick = () => {
   const now = performance.now() / 1000;
   P.taps = P.taps.filter(t => now - t < 2.5); P.taps.push(now);
-  if (P.taps.length >= 3) { const b = tempoFromOnsets(P.taps); if (b) { P.bpm = b; savePerfPrefs(); $('pBpm').value = b; pStatus(`Tap tempo: ${b} BPM (${P.taps.length} taps)`); } }
+  if (P.taps.length >= 3) { const b = tempoFromOnsets(P.taps); if (b) { P.bpm = b; savePerfPrefs(); $('pBpm').value = b; if (P.clock && !P.rec) { stopClock(); startClock(); } pStatus(`Tap tempo: ${b} BPM (${P.taps.length} taps)`); } }
   else pStatus('Keep tapping…');
 };
 
@@ -1089,7 +1089,7 @@ $('pListen').onclick = async () => {
     const on = detectOnsets(mono).filter(o => !looksLikeClick(o.feat));
     const b = tempoFromOnsets(on.map(o => o.t));
     if (!b) { pStatus(`Heard ${on.length} hit(s); need at least 3 steady quarter notes. Try again.`); return; }
-    P.bpm = b; savePerfPrefs(); $('pBpm').value = b; pStatus(`Listened: ${b} BPM from ${on.length} hits.`);
+    P.bpm = b; savePerfPrefs(); $('pBpm').value = b; if (P.clock && !P.rec) { stopClock(); startClock(); } pStatus(`Listened: ${b} BPM from ${on.length} hits.`);
   } catch (err) { pStatus('Microphone not available: ' + err.message); }
 };
 async function teachSound(i) {
@@ -1110,6 +1110,26 @@ async function teachSound(i) {
 }
 
 // Record a take: 1 bar count-in, then loop the bars until Stop. Every pass is layered (folded) into the loop.
+// The click: a free-running clock that keeps going between takes (Click button / closing the panel stops it)
+function startClock() {
+  const ctx = audioCtx(), clicks = clickBuffers(ctx), beat = 60 / P.bpm;
+  const gain = ctx.createGain(); gain.gain.value = P.clickVol; gain.connect(ctx.destination);
+  const C = { t0: ctx.currentTime + 0.4, beat, bar: 4 * beat, gain, next: 0, sched: [], bpm: P.bpm };
+  const schedule = () => {
+    while (C.t0 + C.next * beat < ctx.currentTime + 0.5) {
+      const n = ctx.createBufferSource(); n.buffer = C.next % 4 === 0 ? clicks.accent : clicks.beat; n.connect(gain); n.start(C.t0 + C.next * beat);
+      C.sched.push(C.t0 + C.next * beat); if (C.sched.length > 4000) C.sched.splice(0, 2000); C.next++;
+    }
+  };
+  schedule(); C.timer = setInterval(schedule, 50);
+  P.clock = C; showClock();
+  return C;
+}
+function stopClock() { if (!P.clock) return; clearInterval(P.clock.timer); try { P.clock.gain.disconnect(); } catch (e) {} P.clock = null; showClock(); }
+function showClock() { const on = !!P.clock; $('pClickBtn').classList.toggle('on', on); $('pClickBtn').textContent = on ? '■ Click' : '▶︎ Click'; }
+$('pClickBtn').onclick = () => { if (P.rec) return; if (P.clock) stopClock(); else startClock(); };
+
+// Record a take. Click not running: start it with a 1-bar count-in. Click running: start on the next bar line.
 $('pRec').onclick = async () => {
   if (P.rec) return stopTake();
   if (P.mode === 'beatbox' && !P.sounds.some(x => x.centroid)) { pStatus('Teach at least one sound first (Teach buttons).'); return; }
@@ -1117,35 +1137,33 @@ $('pRec').onclick = async () => {
   try {
     const ctx = audioCtx(); stopPlay();
     const r = await micOpen();
-    const beat = 60 / P.bpm, bar = 4 * beat, clicks = clickBuffers(ctx);
-    const clickGain = ctx.createGain(); clickGain.gain.value = P.clickVol; clickGain.connect(ctx.destination);
-    const t0 = ctx.currentTime + 0.4, bar1 = t0 + bar;
-    let next = 0; const sched = [];
-    const schedule = () => { while (t0 + next * beat < ctx.currentTime + 0.5) { const n = ctx.createBufferSource(); n.buffer = next % 4 === 0 ? clicks.accent : clicks.beat; n.connect(clickGain); n.start(t0 + next * beat); sched.push(t0 + next * beat); next++; } };
-    schedule();
-    P.rec = { r, t0, bar1, beat, bar, clickGain, sched, timer: setInterval(() => {
-      schedule();
+    const recStart = ctx.currentTime;
+    if (P.clock && Math.abs(P.clock.bpm - P.bpm) > 1e-6) stopClock();   // tempo changed
+    let C = P.clock, bar1;
+    if (!C) { C = startClock(); bar1 = C.t0 + C.bar; }                 // count-in bar
+    else { const k = Math.ceil((recStart + 0.25 - C.t0) / C.bar); bar1 = C.t0 + k * C.bar; }   // next bar line (at least 0.25 s away)
+    P.rec = { r, recStart, bar1, C, timer: setInterval(() => {
       const t = ctx.currentTime;
-      const msg = t < bar1 ? `Count-in ${4 - Math.floor((t - t0) / beat)}…` : `Recording · pass ${Math.floor((t - bar1) / (bar * P.bars)) + 1} · bar ${Math.floor(((t - bar1) % (bar * P.bars)) / bar) + 1} of ${P.bars}`;
-      $('pRec').textContent = '■ Stop'; pStatus(msg);
+      const msg = t < bar1 ? `Get ready… ${Math.min(4, Math.ceil((bar1 - t) / C.beat))}` : `Recording · pass ${Math.floor((t - bar1) / (C.bar * P.bars)) + 1} · bar ${Math.floor(((t - bar1) % (C.bar * P.bars)) / C.bar) + 1} of ${P.bars}`;
+      pStatus(msg);
     }, 100) };
-    $('pRec').classList.add('on'); showPerf();
+    $('pRec').classList.add('on'); $('pRec').textContent = '■ Stop'; showPerf();
   } catch (err) { P.rec = null; pStatus('Could not start: ' + (err.name === 'NotAllowedError' ? 'microphone access was not allowed.' : err.message)); }
 };
 async function stopTake() {
   const R = P.rec; P.rec = null; clearInterval(R.timer);
-  R.clickGain.disconnect();
+  const C = R.C; R.beat = C.beat; R.bar = C.bar;                              // the click keeps running
   $('pRec').classList.remove('on'); $('pRec').textContent = '● Record take';
   const { mono, frame0 } = micClose(R.r);
   const sr = audioCtx().sampleRate, tOf = i => (frame0 + i) / sr;          // recording sample -> audio clock
   const on = detectOnsets(mono).map(o => ({ ...o, T: tOf(o.t * sr) }));
   // latency: the count-in clicks heard back through the mic (speaker) -> round-trip delay
   const offs = [];
-  for (let k = 0; k < 4; k++) { const ct = R.t0 + k * R.beat; const o = on.find(x => x.T - ct > -0.01 && x.T - ct < 0.3 && looksLikeClick(x.feat)); if (o) offs.push(o.T - ct); }   // only the click itself, not claps during the count-in
+  for (const ct of C.sched.filter(t => t >= R.recStart && t < R.bar1 - 0.05)) { const o = on.find(x => x.T - ct > -0.01 && x.T - ct < 0.3 && looksLikeClick(x.feat)); if (o) offs.push(o.T - ct); }   // clicks before the take starts; only the click itself, not claps
   offs.sort((a, b) => a - b);
   if (offs.length >= 3 && offs[offs.length - 1] - offs[0] < 0.02) { P.latency = offs[Math.floor(offs.length / 2)]; savePerfPrefs(); log(`Perform latency measured from the click: ${(P.latency * 1000).toFixed(0)} ms`); }
   const lat = latency(), step = R.beat / 4, loopSteps = 16 * P.bars, loopSec = R.bar * P.bars;
-  const clickTimes = R.sched.map(t => t + lat);
+  const clickTimes = C.sched.filter(t => t >= R.recStart - 0.1).map(t => t + lat);
   const hits = [];
   let clicksIgnored = 0, unsure = 0;
   for (const o of on) {
