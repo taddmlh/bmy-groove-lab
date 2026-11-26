@@ -70,7 +70,7 @@ export function renderBar(ctx, pattern, swing, bpm) {
 
 // ---- BMY's built-in kit: GeneralUser GS "Standard 1", rendered per BMY velocity label (kit/kit.json)
 const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
-const KIT_VERSION = 2;   // bump when the kit is re-rendered, so browsers fetch the new samples
+const KIT_VERSION = 3;   // bump when the kit is re-rendered, so browsers fetch the new samples
 let KIT = null;
 export async function loadKit(ctx, base = 'kit/') {
   if (KIT) return KIT;

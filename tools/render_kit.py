@@ -13,7 +13,7 @@ SR = 44100
 VELS = {'gh': 28, 'sf': 46, 'n1': 66, 'n2': 82, 'a1': 102, 'a2': 116}
 NOTES = {36: 'kick', 37: 'sidestick', 38: 'snare', 40: 'snareAlt', 42: 'closedHat', 46: 'openHat', 51: 'ride',
          48: 'tomHigh', 47: 'tomMid', 43: 'tomFloor', 49: 'crash', 60: 'oneShotA', 61: 'oneShotB', 62: 'oneShotC'}
-MAXLEN = {'crash': 3.0, 'ride': 2.5, 'openHat': 1.6, 'tomFloor': 1.6, 'tomMid': 1.4, 'tomHigh': 1.2}
+MAXLEN = {'crash': 3.0, 'ride': 2.5, 'openHat': 0.9, 'tomFloor': 1.6, 'tomMid': 1.4, 'tomHigh': 1.2}
 
 raw = open(SF2, 'rb').read()
 i = raw.find(b'smpl'); n = struct.unpack('<I', raw[i + 4:i + 8])[0]
@@ -123,6 +123,9 @@ for note, lane in NOTES.items():
         excl = excl or zs[0][1].get(57, 0)
         m = np.zeros(max(len(p) for p in parts))
         for p in parts: m[:len(p)] += p
+        if lane == 'openHat':   # the sample's tail rings at ~440 Hz from ~0.8 s; damp it like a foot closing the hat
+            t = np.arange(len(m)) / SR
+            m *= np.where(t < 0.25, 1.0, np.exp(-(t - 0.25) / 0.16))
         # trim the tail at -60 dB of this layer's peak, 5 ms fade
         pk = np.max(np.abs(m)) + 1e-9; idx = np.where(np.abs(m) > pk * 1e-3)[0]
         end = min(len(m), (idx[-1] if len(idx) else 100) + 220)
