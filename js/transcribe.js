@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126f';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261126g';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
