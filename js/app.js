@@ -115,7 +115,7 @@ function drawOverlays(g, w, h, dpr, grips) {
     const x0 = tToX(S.sel.a, w, dpr), x1 = tToX(S.sel.b, w, dpr);
     g.fillStyle = 'rgba(255,173,20,.16)'; g.fillRect(x0, 0, x1 - x0, h);
     g.fillStyle = '#ffad14'; g.fillRect(x0, 0, (grips ? 2 : 1.5) * dpr, h); g.fillRect(x1 - (grips ? 2 : 1.5) * dpr, 0, (grips ? 2 : 1.5) * dpr, h);
-    if (grips && selIsBars()) {
+    if (grips && !S.locked && selIsBars()) {
       const hw = 14 * dpr;
       g.fillRect(x0, 0, hw, h); g.fillRect(x1 - hw, 0, hw, h);
       g.fillStyle = '#000';
@@ -255,7 +255,7 @@ function pointerDrag(el, { down, move, up }) {
   }, { passive: false });
 }
 function handleHit(st) {          // grab the start or end of a bar-aligned selection
-  if (!S.grid || !selIsBars()) return false;
+  if (!S.grid || S.locked || !selIsBars()) return false;
   const xa = (S.sel.a - S.view.start) * S.view.pps, xb = (S.sel.b - S.view.start) * S.view.pps;
   const n = Math.round((S.sel.b - S.sel.a) / barSec());
   if (Math.abs(st.x - xa) < 22) { Object.assign(st, { mode: 'start', a0: S.sel.a, n }); return true; }
@@ -377,6 +377,7 @@ $('file').addEventListener('change', async e => {
     status('Decoding the song…', 0.02); crumb('decoding ' + f.name);
     const ctx = audioCtx();
     const buf = await ctx.decodeAudioData(await f.arrayBuffer());
+    S.locked = false;
     Object.assign(S, { name: f.name.replace(/\.[^.]+$/, ''), dur: buf.duration, mixBuf: buf, drumBuf: null, drumMono: null, extracted: [],
       hits: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null });
     S.mixMono = toMono(buf.getChannelData(0), buf.numberOfChannels > 1 ? buf.getChannelData(1) : null);
@@ -394,7 +395,7 @@ $('file').addEventListener('change', async e => {
     status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
   } catch (err) {
     crumbDone(); status('Could not open that file: ' + err.message); log('ERROR ' + (err.stack || err));
-  } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); }
+  } finally { busy = false; updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); }
 });
 async function specAsync(mono, onP) {   // logSpec in chunks so the page stays responsive
   const CH = SR * 20, parts = [];
@@ -444,6 +445,17 @@ $('half').onclick = () => S.grid && setBpm(S.grid.bpm / 2);
 $('dbl').onclick = () => S.grid && setBpm(S.grid.bpm * 2);
 $('nudgeL').onclick = () => { if (!S.grid) return; S.grid.t0 -= 0.01; gridChanged(); };
 $('nudgeR').onclick = () => { if (!S.grid) return; S.grid.t0 += 0.01; gridChanged(); };
+const GRID_CTRLS = ['bpmDn', 'bpm', 'bpmUp', 'half', 'dbl', 'beatL', 'beatR', 'nudgeL', 'nudgeR', 'barHere'];
+function showLock() {
+  $('lock').setAttribute('aria-pressed', !!S.locked);
+  $('lock').textContent = S.locked ? '🔒 Locked' : 'Lock';
+  for (const id of GRID_CTRLS) $(id).disabled = !!S.locked || !S.grid;
+  $('lock').disabled = !S.grid;
+}
+$('lock').onclick = () => {
+  S.locked = !S.locked; showLock(); redraw();
+  status(S.locked ? `Tempo and bar lines locked at ${S.grid.bpm.toFixed(2)} BPM. Tap Locked to unlock.` : 'Tempo and bar lines unlocked.');
+};
 $('beatL').onclick = () => { if (!S.grid) return; S.grid.t0 -= 60 / S.grid.bpm; gridChanged('Bar lines moved one beat earlier.'); };
 $('beatR').onclick = () => { if (!S.grid) return; S.grid.t0 += 60 / S.grid.bpm; gridChanged('Bar lines moved one beat later.'); };
 $('barHere').onclick = () => { if (!S.grid) return; S.grid.t0 = S.playhead; gridChanged('Bar line moved to the playhead.'); };
@@ -740,4 +752,4 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 // ---------------------------------------------------------------- start
 log('Groove Lab loaded (v1)');
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
-updateButtons(); renderGrid(); redraw();
+updateButtons(); showLock(); renderGrid(); redraw();
