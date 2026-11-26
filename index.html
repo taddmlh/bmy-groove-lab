@@ -93,6 +93,19 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
 @media (max-width:1500px){.hide-narrow{display:none}}
 @media (max-width:820px){.title{max-width:44vw}}
 @media (prefers-reduced-motion:reduce){.prog>i{transition:none}}
+.lvl{position:relative;display:inline-block;flex:1 1 180px;min-width:120px;height:22px;padding:0;border-radius:6px;border:1px solid var(--line);overflow:hidden;
+  background:linear-gradient(90deg,#191b21 0,#191b21 80%,#24301f 80%,#24301f 95%,#3a1f22 95%)}
+.lvl>i{position:absolute;left:0;top:0;bottom:0;width:0;background:#3fbf6a;transition:width .05s linear}
+.lvl>b{position:absolute;top:0;bottom:0;width:2px;left:0;background:#fff;opacity:.85}
+.lvl>em{position:absolute;inset:0;display:none;align-items:center;justify-content:center;font-style:normal;font-size:12px;color:var(--dim)}
+.lvl.idle>em{display:flex}.lvl.idle>i,.lvl.idle>b{display:none}
+.lvl.clip{border-color:#e5484d;box-shadow:0 0 0 2px rgba(229,72,77,.35)}
+.lvlDb{min-width:64px;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;text-align:right}
+.lvlDb.clip{color:#e5484d;font-weight:700}
+.gainV{min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
+.gainGrp input{width:110px;accent-color:var(--acc)}
+#rsGain{accent-color:var(--acc)}
+.recsheet{width:min(520px,94vw);left:auto;right:10px}
 .tools{display:contents}
 #pListen.live{background:var(--acc);border-color:var(--acc);color:#000;font-weight:600;animation:listen 1.4s ease-in-out infinite}
 @keyframes listen{50%{box-shadow:0 0 0 5px rgba(255,173,20,.25)}}
@@ -158,6 +171,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
   #pRec{flex:1 1 100%;min-height:72px;font-size:19px;order:-1}
   #pUndo,#pClear{flex:1 1 0}
   .perf .precbar .grp{flex:1 1 100%;justify-content:center}
+  .gainGrp{flex:1 1 100%}.gainGrp input{flex:1 1 auto;width:auto}
   .recent:not(.perf){position:fixed;left:2vw;right:2vw;top:calc(env(safe-area-inset-top) + 50px);width:auto;max-height:70vh}
   details[open]>div{left:2vw;right:2vw;width:auto;bottom:calc(env(safe-area-inset-bottom) + 130px);max-height:60vh}
   /* tab bar; in Safari leave room for its floating toolbar */
@@ -209,12 +223,32 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
       <select id="pLane" aria-label="Lane"></select>
       <span id="pTeachBox" class="hidden"><span id="pSounds"></span></span>
     </div>
+    <div class="bar lvlrow" style="margin-top:8px">
+      <span class="label">Input</span>
+      <button class="lvl idle" id="pLvl" title="Tap to check the input level"><i></i><b></b><em>Tap to check level</em></button>
+      <span class="lvlDb" id="pLvlDb"></span>
+      <span class="grp gainGrp"><span class="label">Gain</span><input id="pGain" type="range" min="-12" max="24" step="1" value="0" aria-label="Input gain"><span id="pGainV" class="label gainV">0 dB</span></span>
+    </div>
     <div id="pStatus" class="foot">Headphones give the cleanest takes; with the speaker, the click is measured and ignored.</div>
     <div class="bar precbar" style="margin-top:8px">
       <button id="pRec" class="primary" style="min-width:130px">● Record take</button>
       <button id="pUndo" disabled>Undo layer</button><button id="pClear" disabled>Clear</button>
       <span class="grow"></span>
       <span class="grp"><span class="label">Latency</span><button id="pLatDn">−</button><span id="pLat" class="label" style="min-width:86px;text-align:center"></span><button id="pLatUp">+</button></span>
+    </div>
+  </div>
+  <div id="recSheet" class="recent recsheet hidden" role="dialog" aria-label="Record from input">
+    <h3>Record from input</h3>
+    <div class="bar"><span class="label">Input</span><select id="rsInput" aria-label="Audio input" style="flex:1 1 200px"></select></div>
+    <div class="bar lvlrow" style="margin-top:10px">
+      <span class="lvl idle" id="rsLvl"><i></i><b></b><em>Waiting for the input…</em></span>
+      <span class="lvlDb" id="rsLvlDb"></span>
+    </div>
+    <div class="bar" style="margin-top:8px"><span class="label">Gain</span><input id="rsGain" type="range" min="-12" max="24" step="1" value="0" aria-label="Input gain" style="flex:1 1 auto"><span id="rsGainV" class="label gainV">0 dB</span></div>
+    <div class="foot">Play the loudest part: peaks should sit in the shaded zone (about −12 to −3 dB) and never hit CLIP.</div>
+    <div class="bar" style="margin-top:6px">
+      <button id="rsStart" class="primary" style="flex:1 1 auto;min-height:48px">● Start recording</button>
+      <button id="rsClose">Close</button>
     </div>
   </div>
   <section class="top">
@@ -297,6 +331,6 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
   </nav>
 </div>
-<script type="module" src="js/app.js?b=20261126h"></script>
+<script type="module" src="js/app.js?b=20261126i"></script>
 </body>
 </html>

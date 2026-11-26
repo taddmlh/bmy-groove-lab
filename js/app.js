@@ -1,13 +1,13 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126h';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126h';
-import { detectGrid, barTimes } from './beats.js?b=20261126h';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126h';
-import { buildBank, bankFileName } from './bank.js?b=20261126h';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126h';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126h';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126h';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126h';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126i';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126i';
+import { detectGrid, barTimes } from './beats.js?b=20261126i';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126i';
+import { buildBank, bankFileName } from './bank.js?b=20261126i';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126i';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126i';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126i';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126i';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -512,66 +512,128 @@ $('recentBtn').onclick = async () => {
 };
 document.addEventListener('pointerdown', e => { if (!$('recent').classList.contains('hidden') && !$('recent').contains(e.target) && e.target !== $('recentBtn')) closeRecent(); });
 
+// ---------------------------------------------------------------- input level meters (Record panel and Perform)
+const dbOf = g => 20 * Math.log10(Math.max(1e-6, g));
+const lvlPct = db => Math.max(0, Math.min(100, (db + 60) / 60 * 100));          // -60..0 dBFS across the bar
+function runMeter(id, an, alive) {
+  const el = $(id), txt = $(id + 'Db'), buf = new Float32Array(an.fftSize);
+  let hold = -90, holdT = 0, clipT = 0;
+  el.classList.remove('idle');
+  const tick = () => {
+    if (!alive()) { el.classList.add('idle'); el.classList.remove('clip'); txt.textContent = ''; txt.classList.remove('clip'); return; }
+    an.getFloatTimeDomainData(buf);
+    let pk = 0; for (let i = 0; i < buf.length; i++) { const v = Math.abs(buf[i]); if (v > pk) pk = v; }
+    const db = dbOf(pk), now = performance.now();
+    if (db > hold || now - holdT > 1500) { hold = db; holdT = now; }
+    if (pk >= 0.98) clipT = now;
+    const clip = now - clipT < 1500;
+    el.firstChild.style.width = lvlPct(db) + '%';
+    el.firstChild.style.background = db > -3 ? '#e5484d' : db > -12 ? '#f5c542' : '#3fbf6a';
+    el.children[1].style.left = `calc(${lvlPct(hold)}% - 2px)`;
+    el.classList.toggle('clip', clip); txt.classList.toggle('clip', clip);
+    txt.textContent = clip ? 'CLIP' : hold < -59 ? '−∞ dB' : `${Math.round(hold)} dB`;
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+const gainLabel = db => (db > 0 ? '+' : db < 0 ? '−' : '') + Math.abs(db) + ' dB';
+
 // ---------------------------------------------------------------- Record from the audio input
-let rec = null;
+// ● Record opens a panel: pick the input, watch the level, set the gain, then Start.
+let rec = null, mon = null;
+let recGainDb = 0; try { recGainDb = +(localStorage.getItem('bmyGLRecGain') || 0); } catch (e) {}
 async function listInputs() {
   try {
     const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
-    const sel = $('inputSel'), cur = sel.value;
-    sel.innerHTML = devs.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || 'Input ' + (i + 1))}</option>`).join('');
-    if (cur) sel.value = cur;
-    sel.classList.toggle('hidden', devs.length < 2);
+    for (const id of ['inputSel', 'rsInput']) {
+      const sel = $(id), cur = sel.value;
+      sel.innerHTML = devs.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || 'Input ' + (i + 1))}</option>`).join('');
+      if (cur) sel.value = cur;
+    }
+    $('inputSel').classList.add('hidden');
   } catch (e) {}
+}
+async function openInput() {
+  closeInput();
+  const ctx = audioCtx(), dev = $('rsInput').value;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    deviceId: dev ? { exact: dev } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 } });
+  await listInputs();
+  const src = ctx.createMediaStreamSource(stream), gain = ctx.createGain(), an = ctx.createAnalyser();
+  gain.gain.value = Math.pow(10, recGainDb / 20); an.fftSize = 2048;
+  src.connect(gain); gain.connect(an);
+  const m = { stream, src, gain, an, label: (stream.getAudioTracks()[0] || {}).label || 'input' };
+  mon = m; runMeter('rsLvl', an, () => mon === m);
+  return m;
+}
+function closeInput() {
+  const m = mon; mon = null; if (!m) return;
+  try { m.src.disconnect(); m.gain.disconnect(); } catch (e) {}
+  m.stream.getTracks().forEach(t => t.stop());
+}
+function showRecSheet(on) {
+  $('recSheet').classList.toggle('hidden', !on); $('rec').setAttribute('aria-expanded', String(on));
+  if (!on && !rec) closeInput();
 }
 $('rec').onclick = async () => {
   if (rec) return stopRecording();
+  if (!$('recSheet').classList.contains('hidden')) return showRecSheet(false);
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('This browser cannot record audio.'); return; }
-  stopPlay();
+  stopPlay(); closeRecent(); showRecSheet(true);
+  $('rsGain').value = recGainDb; $('rsGainV').textContent = gainLabel(recGainDb);
+  try { await openInput(); }
+  catch (err) { showRecSheet(false); status('Could not open the input: ' + (err.name === 'NotAllowedError' ? 'microphone access was not allowed (Settings › Safari › Microphone).' : err.message)); log('ERROR input ' + errText(err)); }
+};
+$('rsInput').onchange = () => { if (!rec) openInput().catch(err => status('Could not open that input: ' + err.message)); };
+$('rsGain').oninput = () => { recGainDb = +$('rsGain').value; $('rsGainV').textContent = gainLabel(recGainDb); if (mon) mon.gain.gain.value = Math.pow(10, recGainDb / 20); try { localStorage.setItem('bmyGLRecGain', recGainDb); } catch (e) {} };
+$('rsClose').onclick = () => showRecSheet(false);
+$('rsStart').onclick = () => rec ? stopRecording() : startRecording();
+async function startRecording() {
   const ctx = audioCtx();
   try {
-    const dev = $('inputSel').value;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: {
-      deviceId: dev ? { exact: dev } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 } });
-    await listInputs();
+    const m = mon || await openInput();
     await ctx.audioWorklet.addModule('js/rec-worklet.js');
-    const src = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, 'bmy-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
     const mute = ctx.createGain(); mute.gain.value = 0;
-    src.connect(node); node.connect(mute); mute.connect(ctx.destination);
-    rec = { stream, src, node, mute, chunks: [[], []], frames: 0, t0: performance.now(), peak: 0, label: (stream.getAudioTracks()[0] || {}).label || 'input' };
+    m.gain.connect(node); node.connect(mute); mute.connect(ctx.destination);
+    rec = { m, node, mute, chunks: [[], []], frames: 0, t0: performance.now(), peak: 0, label: m.label };
     node.port.onmessage = e => {
       const ch = e.data.ch; rec.chunks[0].push(ch[0]); rec.chunks[1].push(ch[1] || ch[0]); rec.frames += ch[0].length;
       let pk = 0; for (const v of ch[0]) pk = Math.max(pk, Math.abs(v)); rec.peak = Math.max(pk, rec.peak * 0.9);
       if (rec.frames > SR * 600) stopRecording();
     };
-    $('rec').classList.add('on'); $('recMeter').classList.remove('hidden');
+    $('rec').classList.add('on'); $('recMeter').classList.remove('hidden'); $('rsStart').classList.add('on'); $('rsInput').disabled = true;
     const tick = () => {
       if (!rec) return;
-      const s = (performance.now() - rec.t0) / 1000;
-      $('rec').textContent = `■ Stop ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      const s = (performance.now() - rec.t0) / 1000, tm = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      $('rec').textContent = `■ Stop ${tm}`; $('rsStart').textContent = `■ Stop recording ${tm}`;
       $('recMeter').firstChild.style.width = Math.min(100, Math.sqrt(rec.peak) * 100) + '%';
       $('recMeter').firstChild.style.background = rec.peak > 0.95 ? '#e5484d' : '#3fbf6a';
       requestAnimationFrame(tick);
     };
     tick();
     status(`Recording from ${rec.label}. Play the song, then tap Stop (up to 10 minutes).`);
-    log('Recording from ' + rec.label);
+    log(`Recording from ${rec.label}, gain ${gainLabel(recGainDb)}`);
   } catch (err) {
     rec = null; status('Could not start recording: ' + (err.name === 'NotAllowedError' ? 'microphone access was not allowed (Settings › Safari › Microphone).' : err.message));
-    log('ERROR rec ' + (err.stack || err));
+    log('ERROR rec ' + errText(err));
   }
-};
+}
 async function stopRecording() {
   const r = rec; rec = null; if (!r) return;
   try { r.node.port.postMessage('stop'); } catch (e) {}
-  r.src.disconnect(); r.node.disconnect(); r.mute.disconnect(); r.stream.getTracks().forEach(t => t.stop());
+  try { r.m.gain.disconnect(r.node); } catch (e) {} r.node.disconnect(); r.mute.disconnect();
+  showRecSheet(false); closeInput();
+  $('rsStart').classList.remove('on'); $('rsStart').textContent = '● Start recording'; $('rsInput').disabled = false;
   $('rec').classList.remove('on'); $('rec').textContent = phoneMQ.matches ? '● Rec' : '● Record'; $('recMeter').classList.add('hidden');
   if (r.frames < SR * 0.5) { status('Recording too short.'); return; }
   const ctx = audioCtx(), buf = ctx.createBuffer(2, r.frames, SR);
   for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); let o = 0; for (const ch of r.chunks[c]) { d.set(ch, o); o += ch.length; } }
   const when = new Date();
   const name = `Recording ${when.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
-  log(`Recorded ${(r.frames / SR).toFixed(1)} s`);
+  let pk = 0; for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > pk) pk = v; } }
+  log(`Recorded ${(r.frames / SR).toFixed(1)} s from ${r.label}, peak ${pk > 0 ? Math.round(dbOf(pk)) + ' dB' : 'silent'}, sample rate ${audioCtx().sampleRate}`);
+  if (pk < 0.001) { status('That recording is silent: no sound reached the input. Check the meter in the Record panel before you start.'); return; }
   await openSong({ key: 'rec-' + when.getTime(), name, bytes: wavBytes(buf), type: 'audio/wav', buf });
 }
 function wavBytes(buf) {
@@ -1024,18 +1086,19 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 // ---------------------------------------------------------------- Perform: clap / tap / beatbox over a click
 const P = {
   bpm: 100, bars: 2, mode: 'lane', lane: 'snare', overdub: true, clickVol: 0.7,
-  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null, clock: null, follow: null
+  latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null, clock: null, follow: null, chain: null, gainDb: 0
 };
-try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { latency: st.latency ?? null, bpm: st.bpm || 100, bars: st.bars || 2, clickVol: st.clickVol ?? 0.7 });
+try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { gainDb: st.gainDb || 0, latency: st.latency ?? null, bpm: st.bpm || 100, bars: st.bars || 2, clickVol: st.clickVol ?? 0.7 });
   if (st.sounds) P.sounds = st.sounds.map(x => ({ ...x, centroid: x.centroid && Float32Array.from(x.centroid) })); } catch (e) {}
 if (!P.sounds) P.sounds = [{ name: 'Kick', lane: 'kick' }, { name: 'Snare', lane: 'snare' }, { name: 'Hat', lane: 'closedHat' }];
-const savePerfPrefs = () => { try { localStorage.setItem('bmyGLPerform', JSON.stringify({ latency: P.latency, bpm: P.bpm, bars: P.bars, clickVol: P.clickVol,
+const savePerfPrefs = () => { try { localStorage.setItem('bmyGLPerform', JSON.stringify({ gainDb: P.gainDb || 0, latency: P.latency, bpm: P.bpm, bars: P.bars, clickVol: P.clickVol,
   sounds: P.sounds.map(x => ({ name: x.name, lane: x.lane, centroid: x.centroid ? Array.from(x.centroid) : null, n: x.n || 0 })) })); } catch (e) {} };
 const pStatus = m => { $('pStatus').textContent = m; };
 const defaultLatency = () => { const c = audioCtx(); return (c.outputLatency || 0) + (c.baseLatency || 0) + 0.015; };
 const latency = () => (P.latency ?? defaultLatency());
 
 function showPerf() {
+  $('pGain').value = P.gainDb || 0; $('pGainV').textContent = gainLabel(P.gainDb || 0);
   $('pBpm').value = P.bpm; $('pClick').value = Math.round(P.clickVol * 100);
   document.querySelectorAll('#pBars button').forEach(b => b.classList.toggle('on', +b.dataset.n === P.bars));
   document.querySelectorAll('#pMode button').forEach(b => b.classList.toggle('on', b.dataset.m === P.mode));
@@ -1052,14 +1115,17 @@ function showPerf() {
 }
 $('perfBtn').onclick = () => {
   const el = $('perf');
-  if (!el.classList.contains('hidden')) { if (!P.rec) { stopFollow(); stopClock(); el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
+  if (!el.classList.contains('hidden')) { if (!P.rec) { stopFollow(); stopClock(); micRelease(); el.classList.add('hidden'); $('perfBtn').setAttribute('aria-expanded', 'false'); } return; }
   closeRecent(); stopPlay(); el.classList.remove('hidden'); $('perfBtn').setAttribute('aria-expanded', 'true'); showPerf();
+  try { navigator.permissions.query({ name: 'microphone' }).then(p => { if (p.state === 'granted' && !$('perf').classList.contains('hidden')) micChain().catch(() => {}); }, () => {}); } catch (e) {}
 };
 $('pBpm').onchange = () => { P.bpm = Math.max(40, Math.min(240, +$('pBpm').value || 100)); savePerfPrefs(); if (P.clock && !P.rec) { stopClock(); startClock(); } };
 document.querySelectorAll('#pBars button').forEach(b => b.onclick = () => { if (P.takes.length && +b.dataset.n !== P.bars) { pStatus('Clear the takes first to change the number of bars.'); return; } P.bars = +b.dataset.n; savePerfPrefs(); showPerf(); });
 document.querySelectorAll('#pMode button').forEach(b => b.onclick = () => { P.mode = b.dataset.m; showPerf(); });
 $('pLane').onchange = () => { P.lane = $('pLane').value; };
 $('pClick').oninput = () => { P.clickVol = +$('pClick').value / 100; savePerfPrefs(); if (P.clock) P.clock.gain.gain.value = P.clickVol; };
+$('pGain').oninput = () => { P.gainDb = +$('pGain').value; $('pGainV').textContent = gainLabel(P.gainDb); if (P.chain) P.chain.gain.gain.value = Math.pow(10, P.gainDb / 20); savePerfPrefs(); };
+$('pLvl').onclick = () => { if (!P.chain) micChain().catch(err => pStatus('Microphone not available: ' + err.message)); };
 $('pLatDn').onclick = () => { P.latency = Math.max(0, latency() - 0.005); savePerfPrefs(); showPerf(); };
 $('pLatUp').onclick = () => { P.latency = latency() + 0.005; savePerfPrefs(); showPerf(); };
 
@@ -1072,23 +1138,40 @@ $('pTap').onclick = () => {
 };
 
 // mic + recorder shared by Listen, Teach and takes
-async function micOpen() {
+async function micChain() {
   const ctx = audioCtx();
   if (!P.stream || P.stream.getAudioTracks().every(t => t.readyState === 'ended')) {
     P.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     await ctx.audioWorklet.addModule('js/rec-worklet.js');
+    P.chain = null;
   }
-  const src = ctx.createMediaStreamSource(P.stream);
+  if (!P.chain) {
+    const src = ctx.createMediaStreamSource(P.stream), gain = ctx.createGain(), an = ctx.createAnalyser();
+    gain.gain.value = Math.pow(10, (P.gainDb || 0) / 20); an.fftSize = 2048;
+    src.connect(gain); gain.connect(an);
+    const ch = P.chain = { src, gain, an };
+    runMeter('pLvl', an, () => P.chain === ch);
+  }
+  return P.chain;
+}
+function micRelease() {                     // leaving Perform: give the mic back (unless something still needs it)
+  if (P.rec || P.follow) return;
+  const ch = P.chain; P.chain = null;
+  if (ch) { try { ch.src.disconnect(); ch.gain.disconnect(); } catch (e) {} }
+  if (P.stream) { P.stream.getTracks().forEach(t => t.stop()); P.stream = null; }
+}
+async function micOpen() {
+  const ctx = audioCtx(), ch = await micChain();
   const node = new AudioWorkletNode(ctx, 'bmy-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
   const mute = ctx.createGain(); mute.gain.value = 0;
-  src.connect(node); node.connect(mute); mute.connect(ctx.destination);
-  const r = { src, node, mute, chunks: [], frame0: null, frames: 0 };
+  ch.gain.connect(node); node.connect(mute); mute.connect(ctx.destination);
+  const r = { src: ch.gain, node, mute, chunks: [], frame0: null, frames: 0 };
   node.port.onmessage = e => { if (r.frame0 === null) r.frame0 = e.data.frame; r.chunks.push(e.data.ch[0]); r.frames += e.data.ch[0].length; };
   return r;
 }
 function micClose(r) {
   try { r.node.port.postMessage('stop'); } catch (e) {}
-  r.src.disconnect(); r.node.disconnect(); r.mute.disconnect();
+  try { r.src.disconnect(r.node); } catch (e) {} r.node.disconnect(); r.mute.disconnect();
   const mono = new Float32Array(r.frames); let o = 0; for (const c of r.chunks) { mono.set(c, o); o += c.length; }
   return { mono, frame0: r.frame0 ?? 0 };
 }
@@ -1320,7 +1403,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26h';
+const BUILD = '2026-11-26i';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
