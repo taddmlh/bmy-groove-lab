@@ -58,7 +58,7 @@ input[type=number]{width:96px;text-align:right}
 .ch button[aria-pressed=true]{color:#000;background:var(--chc,#9aa3b5);font-weight:600}
 #ch-drums{--chc:#ec8a2c}#ch-pattern{--chc:#26c7ff}
 .ch input[type=range]{width:clamp(56px,6vw,96px);height:40px;accent-color:var(--acc);margin:0}
-.title{font-weight:600;font-size:17px;max-width:16vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.title{cursor:pointer;font-weight:600;font-size:17px;max-width:16vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #overview{height:34px;width:100%;display:block;background:var(--panel);border-radius:8px;touch-action:none}
 #detail{position:relative;background:var(--panel);border-radius:10px;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
 #detail canvas{display:block;width:100%}
@@ -107,6 +107,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
 .gainGrp input{width:110px;accent-color:var(--acc)}
 #rsGain{accent-color:var(--acc)}
 .recsheet{width:min(520px,94vw);left:auto;right:10px}
+.title:not(:empty)::after{content:' ✎';font-weight:400;font-size:.8em;color:var(--dim)}
 .tools{display:contents}
 #pListen.live{background:var(--acc);border-color:var(--acc);color:#000;font-weight:600;animation:listen 1.4s ease-in-out infinite}
 @keyframes listen{50%{box-shadow:0 0 0 5px rgba(255,173,20,.25)}}
@@ -262,7 +263,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
       <button id="perfBtn" aria-expanded="false" title="Clap, tap or beatbox over a click">Perform</button>
       <span id="recMeter" class="meter hidden"><i></i></span>
       <select id="inputSel" class="hidden" aria-label="Audio input"></select>
-      <span id="songTitle" class="title"></span>
+      <span id="songTitle" class="title" role="button" title="Tap to rename"></span>
       <span class="grow"></span>
       <span id="tempoTools" class="tools">
       <span class="label bpmlabel">BPM</span>
@@ -335,6 +336,6 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
   </nav>
 </div>
-<script type="module" src="js/app.js?b=20261126r"></script>
+<script type="module" src="js/app.js?b=20261126s"></script>
 </body>
 </html>

@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126r';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126r';
-import { detectGrid, barTimes } from './beats.js?b=20261126r';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126r';
-import { buildBank, bankFileName } from './bank.js?b=20261126r';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126r';
-import { denoise } from './denoise.js?b=20261126r';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126r';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126r';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126r';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126s';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126s';
+import { detectGrid, barTimes } from './beats.js?b=20261126s';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126s';
+import { buildBank, bankFileName } from './bank.js?b=20261126s';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126s';
+import { denoise } from './denoise.js?b=20261126s';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126s';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126s';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126s';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -414,7 +414,9 @@ $('file').addEventListener('change', async e => {
     let pk = 0; for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i += 4) pk = Math.max(pk, Math.abs(d[i])); }
     if (pk < 0.001) throw new Error('that video has no sound (for screen recordings, the app’s sound must be playing while recording)');
     crumbDone(); busy = false;
-    await openSong({ key: `${f.name}|${f.size}`, name, bytes: wavBytes(buf), type: 'audio/wav', buf });
+    let nm = tidyName(name);
+    try { const prev = await getSong(`${f.name}|${f.size}`); if (prev) nm = prev.name; else { const a = prompt('Name this song', nm); if (a && a.trim()) nm = a.trim(); } } catch (e) {}
+    await openSong({ key: `${f.name}|${f.size}`, name: nm, bytes: wavBytes(buf), type: 'audio/wav', buf });
   } catch (err) {
     crumbDone(); busy = false; updateButtons(); status('Could not take the sound from that video: ' + (err.message || err)); log('ERROR video ' + errText(err));
   }
@@ -463,9 +465,10 @@ async function openSong({ key, name, bytes, type, buf }) {
     log(`Opened "${name}": ${buf.duration.toFixed(1)} s`);
     let saved = null;
     try { saved = await getSong(key); } catch (e) { log('Song memory unavailable: ' + e.message); }
+    if (saved && saved.name && saved.name !== S.name) { S.name = saved.name; $('songTitle').textContent = S.name; $('bankName').value = S.name; }
     if (saved && saved.state) {
       await restoreState(saved.state);
-      status(`Restored your work on "${name}": ${S.grid.bpm.toFixed(2)} BPM, ${S.marks.length} marked bar${S.marks.length === 1 ? '' : 's'}${S.patterns.size ? `, ${S.patterns.size} pattern${S.patterns.size > 1 ? 's' : ''}` : ''}.`, 1);
+      status(`Restored your work on "${S.name}": ${S.grid.bpm.toFixed(2)} BPM, ${S.marks.length} marked bar${S.marks.length === 1 ? '' : 's'}${S.patterns.size ? `, ${S.patterns.size} pattern${S.patterns.size > 1 ? 's' : ''}` : ''}.`, 1);
       log('Restored saved state for ' + key);
     } else {
       status('Finding the tempo and bar lines…', 0.1); await yieldUI();
@@ -552,6 +555,28 @@ async function saveStems() {
 const ago = t => { const m = (Date.now() - t) / 60000; return m < 1 ? 'just now' : m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function closeRecent() { $('recent').classList.add('hidden'); $('recentBtn').setAttribute('aria-expanded', 'false'); }
+// ---------------------------------------------------------------- rename
+const tidyName = n => {                                    // "ScreenRecording_11-26-2026 17-08-07_1" -> "Screen recording 26 Nov 17:08"
+  const m = /^ScreenRecording_(\d\d)-(\d\d)-(\d{4}) (\d\d)-(\d\d)/.exec(n);
+  if (!m) return n.replace(/[_]+/g, ' ').trim();
+  const d = new Date(+m[3], +m[1] - 1, +m[2]);
+  return `Screen recording ${d.getDate()} ${d.toLocaleString(undefined, { month: 'short' })} ${m[4]}:${m[5]}`;
+};
+function renameCurrent(nn) {
+  nn = (nn || '').trim(); if (!nn || !S.key || nn === S.name) return;
+  const old = S.name; S.name = nn; $('songTitle').textContent = nn;
+  if (!$('bankName').value || $('bankName').value === old) $('bankName').value = nn;
+  if (P.key === S.key) P.name = nn;
+  saveNow(); log(`Renamed "${old}" to "${nn}"`);
+}
+$('songTitle').onclick = () => { if (!S.key) return; const nn = prompt('Rename this song', S.name); if (nn !== null) renameCurrent(nn); };
+async function renameStored(key, nn) {
+  nn = (nn || '').trim(); if (!nn) return false;
+  if (key === S.key) { renameCurrent(nn); return true; }
+  const rec = await getSong(key); if (!rec) return false;
+  rec.name = nn; if (rec.state && (!rec.state.bankName || rec.state.bankName === rec.name)) rec.state.bankName = nn;
+  await putSong(rec); return true;
+}
 $('recentBtn').onclick = async () => {
   if (!$('recent').classList.contains('hidden')) return closeRecent();
   let list = [];
@@ -560,7 +585,7 @@ $('recentBtn').onclick = async () => {
   el.innerHTML = `<h3>Recent songs</h3>` + (list.length ? list.map(r => `
     <div class="item" data-key="${esc(r.key)}">
       <div class="meta"><b>${esc(r.name)}</b><small>${r.bpm ? r.bpm.toFixed(1) + ' BPM · ' : ''}${r.marks || 0} marked · ${r.patterns || 0} pattern${r.patterns === 1 ? '' : 's'} · ${ago(r.updated)}</small></div>
-      <button data-act="open">Open</button><button data-act="del" title="Forget this song">✕</button>
+      <button data-act="open">Open</button><button data-act="ren" title="Rename">✎</button><button data-act="del" title="Forget this song">✕</button>
     </div>`).join('') : '<div class="foot">No songs yet. Songs you open or record are kept here, with your work.</div>')
     + `<div class="foot">Kept in Safari on this iPad. Add the page to your Home Screen so iPadOS keeps it longer.</div>`;
   el.querySelectorAll('.item').forEach(it => {
@@ -569,6 +594,11 @@ $('recentBtn').onclick = async () => {
       const f = await getFile(key).catch(() => null), meta = list.find(r => r.key === key);
       if (!f) { status('The audio for that song is no longer stored. Open it from Files again.'); return; }
       await openSong({ key, name: meta.name, bytes: f.bytes, type: f.type });
+    };
+    it.querySelector('[data-act=ren]').onclick = async () => {
+      const meta = list.find(r => r.key === key), nn = prompt('Rename this song', meta.name);
+      if (nn === null || !nn.trim()) return;
+      if (await renameStored(key, nn).catch(() => false)) { meta.name = nn.trim(); it.querySelector('.meta b').textContent = meta.name; }
     };
     const del = it.querySelector('[data-act=del]');
     del.onclick = async () => {
@@ -1529,7 +1559,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26r';
+const BUILD = '2026-11-26s';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
