@@ -1,14 +1,14 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126m';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126m';
-import { detectGrid, barTimes } from './beats.js?b=20261126m';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126m';
-import { buildBank, bankFileName } from './bank.js?b=20261126m';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126m';
-import { denoise } from './denoise.js?b=20261126m';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126m';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126m';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126m';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126n';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126n';
+import { detectGrid, barTimes } from './beats.js?b=20261126n';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126n';
+import { buildBank, bankFileName } from './bank.js?b=20261126n';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126n';
+import { denoise } from './denoise.js?b=20261126n';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126n';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126n';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126n';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -398,12 +398,55 @@ function updateButtons() {
 }
 
 // ---------------------------------------------------------------- open song (Files, Recent, Record)
+const isVideo = f => /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
 $('file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
   e.target.value = '';
-  const bytes = await f.arrayBuffer();
-  await openSong({ key: `${f.name}|${f.size}`, name: f.name.replace(/\.[^.]+$/, ''), bytes, type: f.type || 'audio' });
+  const name = f.name.replace(/\.[^.]+$/, '');
+  if (!isVideo(f)) { const bytes = await f.arrayBuffer(); await openSong({ key: `${f.name}|${f.size}`, name, bytes, type: f.type || 'audio' }); return; }
+  // a video (e.g. a screen recording): take its sound, keep only that (as WAV), never the video itself
+  stopPlay(); busy = true; updateButtons();
+  try {
+    status('Taking the sound from the video…', 0.02); crumb('video audio ' + name);
+    let buf = null;
+    if (!/[?&]vidrt\b/.test(location.search)) { try { buf = await audioCtx().decodeAudioData(await f.arrayBuffer()); log(`Video sound decoded directly (${f.type || 'video'})`); } catch (err) { log('Direct decode failed (' + (err.message || err) + '), playing the video through instead'); } }
+    if (!buf) buf = await audioFromVideo(f, p => status(`Taking the sound from the video… ${Math.round(p * 100)}% (plays through once, silently)`, p));
+    let pk = 0; for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i += 4) pk = Math.max(pk, Math.abs(d[i])); }
+    if (pk < 0.001) throw new Error('that video has no sound (for screen recordings, the app’s sound must be playing while recording)');
+    crumbDone(); busy = false;
+    await openSong({ key: `${f.name}|${f.size}`, name, bytes: wavBytes(buf), type: 'audio/wav', buf });
+  } catch (err) {
+    crumbDone(); busy = false; updateButtons(); status('Could not take the sound from that video: ' + (err.message || err)); log('ERROR video ' + errText(err));
+  }
 });
+/** Fallback: play the video once (silently) through the audio graph and record what comes out. Real time. */
+async function audioFromVideo(file, onProg) {
+  const ctx = audioCtx(); try { await ctx.resume(); } catch (e) {}
+  const url = URL.createObjectURL(file), v = document.createElement('video');
+  v.src = url; v.playsInline = true; v.preload = 'auto'; v.setAttribute('playsinline', '');
+  try {
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error('this browser cannot open that video')); });
+    await ctx.audioWorklet.addModule('js/rec-worklet.js');
+    const src = ctx.createMediaElementSource(v);
+    const node = new AudioWorkletNode(ctx, 'bmy-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+    const L = [], R = []; let frames = 0;
+    node.port.onmessage = e => { const ch = e.data.ch; L.push(ch[0]); R.push(ch[1] || ch[0]); frames += ch[0].length; };
+    await v.play();
+    await new Promise((res, rej) => {
+      const t = setInterval(() => { onProg(v.duration ? v.currentTime / v.duration : 0); }, 250);
+      v.onended = () => { clearInterval(t); res(); };
+      v.onerror = () => { clearInterval(t); rej(new Error('the video stopped playing')); };
+    });
+    node.port.postMessage('stop'); src.disconnect(); node.disconnect(); mute.disconnect();
+    if (frames < SR * 0.2) throw new Error('no sound came out of the video');
+    const buf = ctx.createBuffer(2, frames, SR);
+    for (const [c, arr] of [[0, L], [1, R]]) { const d = buf.getChannelData(c); let o = 0; for (const a of arr) { d.set(a, o); o += a.length; } }
+    log(`Video sound captured by playing it through: ${(frames / SR).toFixed(1)} s`);
+    return buf;
+  } finally { URL.revokeObjectURL(url); v.removeAttribute('src'); v.load(); }
+}
 /** Decode, then restore saved work for this song or analyse it fresh. */
 async function openSong({ key, name, bytes, type, buf }) {
   phoneTab("song");
@@ -1458,7 +1501,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26m';
+const BUILD = '2026-11-26n';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
