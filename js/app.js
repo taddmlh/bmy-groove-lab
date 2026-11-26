@@ -1,13 +1,13 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126g';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126g';
-import { detectGrid, barTimes } from './beats.js?b=20261126g';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126g';
-import { buildBank, bankFileName } from './bank.js?b=20261126g';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126g';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126g';
-import { renderRegion, loadKit, audition } from './synth.js?b=20261126g';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126g';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261126h';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261126h';
+import { detectGrid, barTimes } from './beats.js?b=20261126h';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261126h';
+import { buildBank, bankFileName } from './bank.js?b=20261126h';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261126h';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261126h';
+import { renderRegion, loadKit, audition } from './synth.js?b=20261126h';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261126h';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -25,7 +25,8 @@ const log = m => {
 const errText = e => { const m = (e && (e.message || String(e))) || 'unknown'; const st = e && e.stack && !e.stack.includes(m) ? '\n' + e.stack : ''; return m + st; };
 const crumb = m => { try { localStorage.setItem('bmyGLStage', m); } catch (e) {} };
 const crumbDone = () => { try { localStorage.removeItem('bmyGLStage'); } catch (e) {} };
-let lastCrash = null; try { lastCrash = localStorage.getItem('bmyGLStage'); } catch (e) {}
+let lastCrash = null; try { lastCrash = localStorage.getItem('bmyGLStage'); if (lastCrash && /^separating/.test(lastCrash)) localStorage.setItem('bmyGLSepFail', '1'); } catch (e) {}
+const sepFailed = () => { try { return !!localStorage.getItem('bmyGLSepFail'); } catch (e) { return false; } };
 window.addEventListener('error', e => log('PAGE ERROR: ' + (e.message || e.error)));
 window.addEventListener('unhandledrejection', e => log('UNHANDLED: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
 const status = (m, frac) => { $('status').textContent = m; if (frac !== undefined) $('prog').style.width = Math.round(frac * 100) + '%'; };
@@ -659,7 +660,9 @@ $('extract').onclick = async () => {
     if (todo.length) {
       crumb('loading separator');
       const lean = /iPhone|iPod/.test(navigator.userAgent) || phoneMQ.matches || /[?&]lean\b/.test(location.search);
-      if (!TEST_NO_DEMUCS) { await loadDemucs(o, (m, f, c) => { status(m, f * 0.3); if (c) crumb(c); }, { lean }); log(`Drum separator ready (${lean ? 'low-memory mode: one part at a time' : 'all parts loaded'})`); }
+      const skipSep = TEST_NO_DEMUCS || (lean && sepFailed() && confirm('Drum separation ran out of memory on this phone last time.\n\nOK: find the drums straight from the full song (quicker, a little less clean).\nCancel: try separating again.'));
+      if (skipSep && !TEST_NO_DEMUCS) log('Skipping separation: finding drums in the full song');
+      if (!skipSep) { await loadDemucs(o, (m, f, c) => { status(m, f * 0.3); if (c) crumb(c); }, { lean }); log(`Drum separator ready (${lean ? 'low-memory mode: one part at a time' : 'all parts loaded'})`); }
       // regions: each bar +-1 s, merged when close
       const regs = todo.map(i => [Math.max(0, S.bars[i].start - 1), Math.min(S.dur, S.bars[i].end + 1)]).sort((a, b) => a[0] - b[0]);
       const merged = [];
@@ -674,9 +677,9 @@ $('extract').onclick = async () => {
         const s0 = Math.floor(a * SR), s1 = Math.floor(b * SR);
         crumb(`separating ${a.toFixed(1)}-${b.toFixed(1)} s`);
         const t = performance.now();
-        const d = TEST_NO_DEMUCS ? { left: L.slice(s0, s1), right: R.slice(s0, s1) } : await separateDrums(o, L.subarray(s0, s1), R.subarray(s0, s1), p => status(`Separating drums… ${Math.round((done + p * (b - a)) / total * 100)}%`, 0.3 + 0.55 * (done + p * (b - a)) / total),
+        const d = skipSep ? { left: L.slice(s0, s1), right: R.slice(s0, s1) } : await separateDrums(o, L.subarray(s0, s1), R.subarray(s0, s1), p => status(`Separating drums… ${Math.round((done + p * (b - a)) / total * 100)}%`, 0.3 + 0.55 * (done + p * (b - a)) / total),
           (sg, ns, i, n) => { crumb(`separating ${a.toFixed(1)}-${b.toFixed(1)} s, segment ${sg}/${ns}, part ${i}/${n}`); if (lean) status(`Separating drums… segment ${sg} of ${ns}, part ${i} of ${n}`, 0.3 + 0.55 * (done + ((sg - 1) + i / n) / ns * (b - a)) / total); });
-        log(`Separated ${a.toFixed(1)}–${b.toFixed(1)} s in ${((performance.now() - t) / 1000).toFixed(1)} s`);
+        if (!skipSep) { log(`Separated ${a.toFixed(1)}–${b.toFixed(1)} s in ${((performance.now() - t) / 1000).toFixed(1)} s`); try { localStorage.removeItem('bmyGLSepFail'); } catch (e) {} }
         S.drumBuf.getChannelData(0).set(d.left, s0); S.drumBuf.getChannelData(1).set(d.right, s0);
         for (let i = 0; i < d.left.length; i++) S.drumMono[s0 + i] = 0.5 * (d.left[i] + d.right[i]);
         S.extracted.push([a, b]); done += b - a;
@@ -1317,7 +1320,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-26g';
+const BUILD = '2026-11-26h';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 loadKit(audioCtx()).then(k => log('Preview kit: ' + k.name)).catch(e => log('Preview kit failed, using the simple synth: ' + e.message));
 if (lastCrash) { log('LAST RUN STOPPED DURING: ' + lastCrash); status('The last run stopped during: ' + lastCrash + '. Open the Log for details.'); crumbDone(); }
