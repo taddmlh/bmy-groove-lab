@@ -12,6 +12,8 @@ Runs entirely in Safari (iPadOS 26+, WebGPU). Nothing is uploaded.
 4. **BMY mapping** (`js/transcribe.js`): toms split by pitch, open/closed hat and crash/ride by decay, velocity from drum-stem loudness → `gh sf n1 n2 a1 a2`, bank-wide swing (1/8, 1/16) and per-beat triplets (`t4`, `t8` with `tripletPattern`, `note2/3Velocity`).
 5. **Export** (`js/bank.js`): schema 1, as `BMY_PatternBank.swift` validates it.
 
+**Song memory:** each song (audio file, grid, lock, marks, swing, hits, separated drum stems, pattern edits) is kept in IndexedDB on the iPad (`js/db.js`) and listed under Recent. **Record:** captures the current audio input via an AudioWorklet (`js/rec-worklet.js`).
+
 Test hook: `?nodemucs` treats the song as an already-separated drum track.
 
 ## Credits

@@ -6,6 +6,7 @@ import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from
 import { buildBank, bankFileName } from './bank.js';
 import { loadDemucs, separateDrums } from './demucs.js';
 import { renderRegion, loadKit, audition } from './synth.js';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -36,7 +37,7 @@ const S = {
 };
 let ort = null, actx = null;
 const TEST_NO_DEMUCS = new URLSearchParams(location.search).has('nodemucs');   // test hook: audio is already drums only
-if (TEST_NO_DEMUCS) window.GL = { S, get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
+if (TEST_NO_DEMUCS) window.GL = { S, saveNow: () => saveNow(), get loop() { return nodes.mix && [nodes.mix.loopStart, nodes.mix.loopEnd]; }, get nodes() { return Object.keys(nodes); }, get gains() { return Object.fromEntries(Object.entries(gains).map(([k, g]) => [k, +g.gain.value.toFixed(2)])); }, get playing() { return playing; } };
 
 async function getOrt() {
   if (ort) return ort;
@@ -348,7 +349,7 @@ function afterMarksChanged() {
   if (S.hits.length) buildPatterns(false);
   if (S.tab === null || !S.marks.includes(S.tab)) S.tab = S.marks.find(i => S.patterns.has(i)) ?? S.marks[0] ?? null;
   updateButtons(); renderTabs(); renderGrid(); redraw();
-  syncPlayback();
+  syncPlayback(); scheduleSave();
 }
 $('markSel').onclick = () => {
   if (!S.sel) return;
@@ -367,36 +368,205 @@ function updateButtons() {
   $('undo').disabled = !S.undo.length;
 }
 
-// ---------------------------------------------------------------- open song
+// ---------------------------------------------------------------- open song (Files, Recent, Record)
 $('file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
   e.target.value = '';
-  stopPlay();
+  const bytes = await f.arrayBuffer();
+  await openSong({ key: `${f.name}|${f.size}`, name: f.name.replace(/\.[^.]+$/, ''), bytes, type: f.type || 'audio' });
+});
+/** Decode, then restore saved work for this song or analyse it fresh. */
+async function openSong({ key, name, bytes, type, buf }) {
+  stopPlay(); closeRecent();
   try {
     busy = true; updateButtons();
-    status('Decoding the song…', 0.02); crumb('decoding ' + f.name);
-    const ctx = audioCtx();
-    const buf = await ctx.decodeAudioData(await f.arrayBuffer());
+    status('Decoding the song…', 0.02); crumb('decoding ' + name);
+    if (!buf) buf = await audioCtx().decodeAudioData(bytes.slice(0));
     S.locked = false;
-    Object.assign(S, { name: f.name.replace(/\.[^.]+$/, ''), dur: buf.duration, mixBuf: buf, drumBuf: null, drumMono: null, extracted: [],
-      hits: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null });
+    Object.assign(S, { key, name, dur: buf.duration, mixBuf: buf, drumBuf: null, drumMono: null, extracted: [],
+      hits: [], patterns: new Map(), marks: [], tab: null, undo: [], sel: null, playhead: 0, ovPeaks: null, swing: { type: 'Off', depth: 0 } });
     S.mixMono = toMono(buf.getChannelData(0), buf.numberOfChannels > 1 ? buf.getChannelData(1) : null);
     $('songTitle').textContent = S.name; $('bankName').value = S.name;
-    log(`Opened "${f.name}": ${buf.duration.toFixed(1)} s`);
-    status('Finding the tempo and bar lines…', 0.1); await yieldUI();
-    crumb('analysing tempo');
-    S.mixSpec = await specAsync(S.mixMono, p => status('Finding the tempo and bar lines…', 0.1 + 0.85 * p));
-    S.grid = detectGrid(S.mixSpec.data, S.mixSpec.frames);
-    log(`Tempo ${S.grid.bpm} BPM, first bar line at ${S.grid.t0.toFixed(3)} s`);
-    rebuildBars(); setBpmField();
-    S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (barSec() * 12));
-    S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
+    log(`Opened "${name}": ${buf.duration.toFixed(1)} s`);
+    let saved = null;
+    try { saved = await getSong(key); } catch (e) { log('Song memory unavailable: ' + e.message); }
+    if (saved && saved.state) {
+      await restoreState(saved.state);
+      status(`Restored your work on "${name}": ${S.grid.bpm.toFixed(2)} BPM, ${S.marks.length} marked bar${S.marks.length === 1 ? '' : 's'}${S.patterns.size ? `, ${S.patterns.size} pattern${S.patterns.size > 1 ? 's' : ''}` : ''}.`, 1);
+      log('Restored saved state for ' + key);
+    } else {
+      status('Finding the tempo and bar lines…', 0.1); await yieldUI();
+      crumb('analysing tempo');
+      S.mixSpec = await specAsync(S.mixMono, p => status('Finding the tempo and bar lines…', 0.1 + 0.85 * p));
+      S.grid = detectGrid(S.mixSpec.data, S.mixSpec.frames); S.mixSpec = null;
+      log(`Tempo ${S.grid.bpm} BPM, first bar line at ${S.grid.t0.toFixed(3)} s`);
+      rebuildBars();
+      S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (barSec() * 12));
+      S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
+      status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
+    }
+    setBpmField();
     crumbDone();
-    status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
+    try { if (!(await hasFile(key))) await putFile({ key, bytes, type }); } catch (e) { log('Could not keep the audio file: ' + e.message); }
+    askPersist();
+    saveNow();
   } catch (err) {
-    crumbDone(); status('Could not open that file: ' + err.message); log('ERROR ' + (err.stack || err));
+    crumbDone(); status('Could not open that song: ' + err.message); log('ERROR ' + (err.stack || err));
   } finally { busy = false; updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); }
-});
+}
+
+// ---------------------------------------------------------------- song memory
+function snapshot() {
+  return {
+    v: 1, grid: { ...S.grid }, locked: !!S.locked, marks: [...S.marks], tab: S.tab, swing: { ...S.swing },
+    sel: S.sel && { ...S.sel }, view: { ...S.view }, mixer: S.mixer, bankName: $('bankName').value,
+    extracted: S.extracted.map(r => [...r]),
+    hits: S.hits.map(h => ({ time: h.time, cls: h.cls, strength: h.strength, levelDb: h.levelDb, decay: h.decay, pitch: h.pitch })),
+    patterns: [...S.patterns.entries()].map(([i, p]) => [i, { cells: p.cells, hatUseAlt: p.hatUseAlt, notes: p.notes || [], edited: !!p.edited }])
+  };
+}
+async function restoreState(st) {
+  S.grid = { ...st.grid }; rebuildBars();
+  S.locked = !!st.locked; S.marks = (st.marks || []).filter(i => i < S.bars.length);
+  S.swing = st.swing || { type: 'Off', depth: 0 };
+  S.hits = st.hits || []; S.patterns = new Map((st.patterns || []).filter(([i]) => i < S.bars.length));
+  S.tab = S.patterns.has(st.tab) || S.marks.includes(st.tab) ? st.tab : (S.marks[0] ?? null);
+  S.sel = st.sel || null; if (st.view) S.view = { ...st.view };
+  if (st.bankName) $('bankName').value = st.bankName;
+  const stems = await getStems(S.key).catch(() => null);
+  if (stems && stems.regions && stems.regions.length) {
+    S.drumBuf = audioCtx().createBuffer(2, S.mixBuf.length, SR); S.drumMono = new Float32Array(S.mixBuf.length);
+    for (const r of stems.regions) {
+      const s0 = Math.floor(r.a * SR);
+      S.drumBuf.getChannelData(0).set(r.L.subarray(0, S.mixBuf.length - s0), s0);
+      S.drumBuf.getChannelData(1).set(r.R.subarray(0, S.mixBuf.length - s0), s0);
+      for (let i = 0; i < r.L.length && s0 + i < S.drumMono.length; i++) S.drumMono[s0 + i] = 0.5 * (r.L[i] + r.R[i]);
+      S.extracted.push([r.a, r.b]);
+    }
+  }
+}
+let saveTimer = 0;
+function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1200); }
+async function saveNow() {
+  clearTimeout(saveTimer);
+  if (!S.key || !S.grid) return;
+  try {
+    await putSong({ key: S.key, name: S.name, updated: Date.now(), dur: S.dur, bpm: S.grid.bpm, patterns: S.patterns.size, marks: S.marks.length, state: snapshot() });
+  } catch (e) { log('Save failed: ' + e.message); }
+}
+async function saveStems() {
+  if (!S.key || !S.drumBuf) return;
+  const L = S.drumBuf.getChannelData(0), R = S.drumBuf.getChannelData(1);
+  const regions = S.extracted.map(([a, b]) => { const s0 = Math.floor(a * SR), s1 = Math.min(L.length, Math.floor(b * SR)); return { a, b, L: L.slice(s0, s1), R: R.slice(s0, s1) }; });
+  try { await putStems({ key: S.key, regions }); } catch (e) { log('Could not keep the drum stems: ' + e.message); }
+}
+
+// ---------------------------------------------------------------- Recent songs
+const ago = t => { const m = (Date.now() - t) / 60000; return m < 1 ? 'just now' : m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function closeRecent() { $('recent').classList.add('hidden'); $('recentBtn').setAttribute('aria-expanded', 'false'); }
+$('recentBtn').onclick = async () => {
+  if (!$('recent').classList.contains('hidden')) return closeRecent();
+  let list = [];
+  try { list = await listSongs(); } catch (e) { status('Song memory is not available in this browser.'); return; }
+  const el = $('recent');
+  el.innerHTML = `<h3>Recent songs</h3>` + (list.length ? list.map(r => `
+    <div class="item" data-key="${esc(r.key)}">
+      <div class="meta"><b>${esc(r.name)}</b><small>${r.bpm ? r.bpm.toFixed(1) + ' BPM · ' : ''}${r.marks || 0} marked · ${r.patterns || 0} pattern${r.patterns === 1 ? '' : 's'} · ${ago(r.updated)}</small></div>
+      <button data-act="open">Open</button><button data-act="del" title="Forget this song">✕</button>
+    </div>`).join('') : '<div class="foot">No songs yet. Songs you open or record are kept here, with your work.</div>')
+    + `<div class="foot">Kept in Safari on this iPad. Add the page to your Home Screen so iPadOS keeps it longer.</div>`;
+  el.querySelectorAll('.item').forEach(it => {
+    const key = it.dataset.key;
+    it.querySelector('[data-act=open]').onclick = async () => {
+      const f = await getFile(key).catch(() => null), meta = list.find(r => r.key === key);
+      if (!f) { status('The audio for that song is no longer stored. Open it from Files again.'); return; }
+      await openSong({ key, name: meta.name, bytes: f.bytes, type: f.type });
+    };
+    const del = it.querySelector('[data-act=del]');
+    del.onclick = async () => {
+      if (del.textContent !== 'Forget?') { del.textContent = 'Forget?'; setTimeout(() => { del.textContent = '✕'; }, 3000); return; }
+      await deleteSong(key); it.remove(); log('Forgot ' + key);
+    };
+  });
+  el.classList.remove('hidden'); $('recentBtn').setAttribute('aria-expanded', 'true');
+};
+document.addEventListener('pointerdown', e => { if (!$('recent').classList.contains('hidden') && !$('recent').contains(e.target) && e.target !== $('recentBtn')) closeRecent(); });
+
+// ---------------------------------------------------------------- Record from the audio input
+let rec = null;
+async function listInputs() {
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+    const sel = $('inputSel'), cur = sel.value;
+    sel.innerHTML = devs.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || 'Input ' + (i + 1))}</option>`).join('');
+    if (cur) sel.value = cur;
+    sel.classList.toggle('hidden', devs.length < 2);
+  } catch (e) {}
+}
+$('rec').onclick = async () => {
+  if (rec) return stopRecording();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('This browser cannot record audio.'); return; }
+  stopPlay();
+  const ctx = audioCtx();
+  try {
+    const dev = $('inputSel').value;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId: dev ? { exact: dev } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 } });
+    await listInputs();
+    await ctx.audioWorklet.addModule('js/rec-worklet.js');
+    const src = ctx.createMediaStreamSource(stream);
+    const node = new AudioWorkletNode(ctx, 'bmy-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+    rec = { stream, src, node, mute, chunks: [[], []], frames: 0, t0: performance.now(), peak: 0, label: (stream.getAudioTracks()[0] || {}).label || 'input' };
+    node.port.onmessage = e => {
+      const ch = e.data; rec.chunks[0].push(ch[0]); rec.chunks[1].push(ch[1] || ch[0]); rec.frames += ch[0].length;
+      let pk = 0; for (const v of ch[0]) pk = Math.max(pk, Math.abs(v)); rec.peak = Math.max(pk, rec.peak * 0.9);
+      if (rec.frames > SR * 600) stopRecording();
+    };
+    $('rec').classList.add('on'); $('recMeter').classList.remove('hidden');
+    const tick = () => {
+      if (!rec) return;
+      const s = (performance.now() - rec.t0) / 1000;
+      $('rec').textContent = `■ Stop ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      $('recMeter').firstChild.style.width = Math.min(100, Math.sqrt(rec.peak) * 100) + '%';
+      $('recMeter').firstChild.style.background = rec.peak > 0.95 ? '#e5484d' : '#3fbf6a';
+      requestAnimationFrame(tick);
+    };
+    tick();
+    status(`Recording from ${rec.label}. Play the song, then tap Stop (up to 10 minutes).`);
+    log('Recording from ' + rec.label);
+  } catch (err) {
+    rec = null; status('Could not start recording: ' + (err.name === 'NotAllowedError' ? 'microphone access was not allowed (Settings › Safari › Microphone).' : err.message));
+    log('ERROR rec ' + (err.stack || err));
+  }
+};
+async function stopRecording() {
+  const r = rec; rec = null; if (!r) return;
+  try { r.node.port.postMessage('stop'); } catch (e) {}
+  r.src.disconnect(); r.node.disconnect(); r.mute.disconnect(); r.stream.getTracks().forEach(t => t.stop());
+  $('rec').classList.remove('on'); $('rec').textContent = '● Record'; $('recMeter').classList.add('hidden');
+  if (r.frames < SR * 0.5) { status('Recording too short.'); return; }
+  const ctx = audioCtx(), buf = ctx.createBuffer(2, r.frames, SR);
+  for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); let o = 0; for (const ch of r.chunks[c]) { d.set(ch, o); o += ch.length; } }
+  const when = new Date();
+  const name = `Recording ${when.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+  log(`Recorded ${(r.frames / SR).toFixed(1)} s`);
+  await openSong({ key: 'rec-' + when.getTime(), name, bytes: wavBytes(buf), type: 'audio/wav', buf });
+}
+function wavBytes(buf) {
+  const n = buf.length, ch = buf.numberOfChannels, out = new ArrayBuffer(44 + n * ch * 2), v = new DataView(out);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * ch * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, ch, true); v.setUint32(24, buf.sampleRate, true); v.setUint32(28, buf.sampleRate * ch * 2, true);
+  v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * ch * 2, true);
+  const chans = [...Array(ch)].map((_, c) => buf.getChannelData(c)); let o = 44;
+  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) { v.setInt16(o, Math.max(-1, Math.min(1, chans[c][i])) * 32767, true); o += 2; }
+  return out;
+}
+navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', listInputs);
+
 async function specAsync(mono, onP) {   // logSpec in chunks so the page stays responsive
   const CH = SR * 20, parts = [];
   let frames = 0;
@@ -453,7 +623,7 @@ function showLock() {
   $('lock').disabled = !S.grid;
 }
 $('lock').onclick = () => {
-  S.locked = !S.locked; showLock(); redraw();
+  S.locked = !S.locked; showLock(); redraw(); scheduleSave();
   status(S.locked ? `Tempo and bar lines locked at ${S.grid.bpm.toFixed(2)} BPM. Tap Locked to unlock.` : 'Tempo and bar lines unlocked.');
 };
 $('beatL').onclick = () => { if (!S.grid) return; S.grid.t0 -= 60 / S.grid.bpm; gridChanged('Bar lines moved one beat earlier.'); };
@@ -510,7 +680,7 @@ $('extract').onclick = async () => {
     status(`Done. Swing ${S.swing.type === 'Off' ? 'off' : S.swing.type + ' ' + S.swing.depth + '%'}. Check each pattern (turn on Drums and Pattern to hear them together), then Export to BMY.`, 1);
   } catch (err) {
     crumbDone(); status('Extraction failed: ' + err.message); log('ERROR ' + (err.stack || err));
-  } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); }
+  } finally { busy = false; updateButtons(); renderTabs(); renderGrid(); redraw(); saveNow(); saveStems(); }
 };
 const countBy = hs => Object.entries(hs.reduce((m, h) => ((m[h.cls] = (m[h.cls] || 0) + 1), m), {})).map(([k, v]) => `${k} ${v}`).join(', ');
 
@@ -626,16 +796,16 @@ function editCell(lane, step) {
   else if (hit) p.cells.splice(p.cells.indexOf(hit), 1);
   else p.cells.push({ lane, step, velocity: 'n2', tripletPattern: '111' });
   p.edited = true;
-  updateButtons(); renderGrid(); syncPlayback();
+  updateButtons(); renderGrid(); syncPlayback(); scheduleSave();
 }
 $('undo').onclick = () => {
   const u = S.undo.pop(); if (!u) return;
   const p = S.patterns.get(u.bar); if (p) { p.cells = u.cells; p.hatUseAlt = u.hatUseAlt; }
-  S.tab = u.bar; updateButtons(); renderTabs(); renderGrid(); syncPlayback();
+  S.tab = u.bar; updateButtons(); renderTabs(); renderGrid(); syncPlayback(); scheduleSave();
 };
-$('swType').onchange = () => { S.swing = { type: $('swType').value, depth: $('swType').value === 'Off' ? 0 : (+$('swDepth').value || 50) }; renderGrid(); syncPlayback(); };
-$('swDepth').onchange = () => { S.swing.depth = Math.max(0, Math.min(100, Math.round(+$('swDepth').value || 0))); renderGrid(); syncPlayback(); };
-$('hatRide').onchange = () => { const p = S.patterns.get(S.tab); if (!p) return; p.hatUseAlt = $('hatRide').checked ? 1 : 0; p.edited = true; renderGrid(); syncPlayback(); };
+$('swType').onchange = () => { S.swing = { type: $('swType').value, depth: $('swType').value === 'Off' ? 0 : (+$('swDepth').value || 50) }; renderGrid(); syncPlayback(); scheduleSave(); };
+$('swDepth').onchange = () => { S.swing.depth = Math.max(0, Math.min(100, Math.round(+$('swDepth').value || 0))); renderGrid(); syncPlayback(); scheduleSave(); };
+$('hatRide').onchange = () => { const p = S.patterns.get(S.tab); if (!p) return; p.hatUseAlt = $('hatRide').checked ? 1 : 0; p.edited = true; renderGrid(); syncPlayback(); scheduleSave(); };
 
 // ---------------------------------------------------------------- playback (3-channel mixer)
 const CH = ['mix', 'drums', 'pattern'];
@@ -748,6 +918,8 @@ $('export').onclick = async () => {
   } catch (err) { status('Export failed: ' + err.message); log('ERROR ' + (err.stack || err)); }
 };
 
+$('bankName').addEventListener('input', scheduleSave);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
 $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($('log').textContent); $('copyLog').textContent = 'Copied'; } catch (e) { $('copyLog').textContent = 'Copy failed'; } };
 
 // ---------------------------------------------------------------- start
