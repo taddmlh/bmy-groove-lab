@@ -5,7 +5,7 @@ import { detectGrid, barTimes } from './beats.js';
 import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js';
 import { buildBank, bankFileName } from './bank.js';
 import { loadDemucs, separateDrums } from './demucs.js';
-import { renderRegion, loadKit } from './synth.js';
+import { renderRegion, loadKit, audition } from './synth.js';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -581,6 +581,7 @@ function renderGrid() {
     const row = document.createElement('div'); row.className = 'row';
     const color = l.role === 'closedHat' && p.hatUseAlt ? '#d9b326' : l.color;
     row.innerHTML = `<div class="glyph" title="${l.role === 'closedHat' && p.hatUseAlt ? 'Ride (hat lane)' : l.name}">${laneGlyph({ ...l, color })}</div>`;
+    row.firstChild.onclick = () => audition(audioCtx(), l.role === 'closedHat' && p.hatUseAlt ? 'ride' : l.role, 'n2');
     const trips = p.cells.filter(c => c.lane === l.role && SPAN[c.ornament]);
     for (let s = 0; s < 16; s++) {
       const cell = document.createElement('div');

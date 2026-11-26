@@ -70,7 +70,7 @@ export function renderBar(ctx, pattern, swing, bpm) {
 
 // ---- BMY's built-in kit: GeneralUser GS "Standard 1", rendered per BMY velocity label (kit/kit.json)
 const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
-const KIT_VERSION = 3;   // bump when the kit is re-rendered, so browsers fetch the new samples
+const KIT_VERSION = 4;   // bump when the kit is re-rendered, so browsers fetch the new samples
 let KIT = null;
 export async function loadKit(ctx, base = 'kit/') {
   if (KIT) return KIT;
@@ -85,6 +85,13 @@ export async function loadKit(ctx, base = 'kit/') {
   return KIT;
 }
 export const kitLoaded = () => !!KIT;
+/** Play one kit sound now (lane icon tap). */
+export function audition(ctx, lane, vel = 'n2') {
+  const snd = sound({ lane, voice: LANE_VOICE[lane] || 'shot', vel });
+  const b = ctx.createBuffer(1, snd.data.length, SR); b.getChannelData(0).set(snd.data);
+  const n = ctx.createBufferSource(); n.buffer = b;
+  const g = ctx.createGain(); g.gain.value = snd.gain; n.connect(g); g.connect(ctx.destination); n.start();
+}
 const KIT_LANE = { closedHat: 'closedHat', openHat: 'openHat', snare: 'snare', snareAlt: 'snareAlt', kick: 'kick', crash: 'crash',
   tomHigh: 'tomHigh', tomMid: 'tomMid', tomFloor: 'tomFloor', oneShotA: 'oneShotA', oneShotB: 'oneShotB', oneShotC: 'oneShotC', ride: 'ride' };
 
