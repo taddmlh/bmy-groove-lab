@@ -402,7 +402,7 @@ async function openSong({ key, name, bytes, type, buf }) {
       S.grid = detectGrid(S.mixSpec.data, S.mixSpec.frames); S.mixSpec = null;
       log(`Tempo ${S.grid.bpm} BPM, first bar line at ${S.grid.t0.toFixed(3)} s`);
       rebuildBars();
-      S.view.pps = Math.max(8, $('wMix').getBoundingClientRect().width / (barSec() * 12));
+      { const w = $('wMix').getBoundingClientRect().width; S.view.pps = Math.max(8, w / (barSec() * Math.max(3, Math.min(12, w / 110)))); }   // ~12 bars on iPad, ~3-4 on a phone
       S.view.start = Math.max(-0.2, S.grid.t0 - 0.2);
       status(`${S.grid.bpm} BPM. Tap a bar and play it. If beat 1 is wrong use ◀︎ Beat / Beat ▶︎, or drag the orange grips on the selected bar in the bar-number strip (left = bar start, right = tempo). Two fingers scroll and pinch-zoom. Then tap bar numbers to mark up to 6 bars.`, 1);
     }
