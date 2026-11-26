@@ -701,7 +701,12 @@ async function transcribeRegion(o, a, b) {
   crumb('transcribing');
   await loadAdtof(o, 'models/adtof.onnx');
   const s0 = Math.floor(a * SR), s1 = Math.min(S.drumMono.length, Math.floor(b * SR));
-  const mono = S.drumMono.subarray(s0, s1);
+  // normalise the stem to -1 dBFS peak (max +30 dB) for detection only; playback and velocities are unaffected
+  const raw = S.drumMono.subarray(s0, s1);
+  let peak = 0; for (let i = 0; i < raw.length; i++) { const v = Math.abs(raw[i]); if (v > peak) peak = v; }
+  const gain = peak > 0 ? Math.min(31.6, 0.891 / peak) : 1;
+  const mono = gain === 1 ? raw : raw.map(v => v * gain);
+  log(`Stem ${a.toFixed(1)}–${b.toFixed(1)} s peaked at ${(20 * Math.log10(peak || 1e-9)).toFixed(1)} dBFS; normalised by ${(20 * Math.log10(gain)).toFixed(1)} dB for transcription`);
   const spec = logSpec(mono);
   const { act, frames } = await activations(o, mono, spec);
   const hits = hitsFrom(act, frames).map(h => ({ ...h, time: h.time + s0 / SR }));
