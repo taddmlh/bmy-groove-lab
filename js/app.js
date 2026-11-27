@@ -1,17 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127k';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127k';
-import { detectGrid, barTimes } from './beats.js?b=20261127k';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261127k';
-import { buildBank, bankFileName } from './bank.js?b=20261127k';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127k';
-import { oafHits, loadOaf } from './oaf.js?b=20261127k';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127k';
-import { denoise } from './denoise.js?b=20261127k';
-import { playability } from './playable.js?b=20261127k';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127k';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261127k';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127k';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128a';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128a';
+import { detectGrid, barTimes } from './beats.js?b=20261128a';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128a';
+import { buildBank, bankFileName } from './bank.js?b=20261128a';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128a';
+import { oafHits, loadOaf } from './oaf.js?b=20261128a';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128a';
+import { denoise } from './denoise.js?b=20261128a';
+import { playability } from './playable.js?b=20261128a';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128a';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128a';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128a';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1712,7 +1712,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27k';
+const BUILD = '2026-11-28a';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
