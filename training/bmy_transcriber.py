@@ -406,6 +406,10 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
     out.mkdir(parents=True, exist_ok=True)
     done_path = out / 'done.json'
     done = set(json.load(open(done_path))) if done_path.exists() else set()
+    # each recording (performance x kit) is its own clip: keyed by its audio file. E-GMD's 'id' is shared by
+    # all 43 kit versions of a performance; folders started before this fix keep using it (legacy).
+    legacy = bool(done) and not any(k.endswith('.wav') for k in done)
+    key = (lambda r: r['id']) if legacy else (lambda r: r['audio_filename'])
     hours = {'train': cfg.train_hours, 'validation': cfg.val_hours, 'test': cfg.test_hours}[split]
     have = sum(int(np.load(p)['lens'].sum()) for p in out.glob('shard_*.npz')) / FPS     # seconds already prepared
     need = hours * 3600 - have
@@ -413,7 +417,7 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
     for r in egmd.select(split, 1e9, seed=cfg.seed):
         if tot >= need:
             break
-        if r['id'] in done:
+        if key(r) in done:
             continue
         rows.append(r); tot += float(r['duration'])
     log(f'{split}: {len(rows)} clips to prepare ({have / 3600:.1f} h of {hours} h done, {len(done)} clips tried)')
@@ -436,7 +440,7 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
         if limit_s and time.time() - t_start > limit_s:
             log('time limit reached; run again to continue')
             break
-        rnd = random.Random(f"{cfg.seed}-{r['id']}")
+        rnd = random.Random(f"{cfg.seed}-{key(r)}")
         try:
             hits = midi_hits(egmd.read(r['midi_filename']))
             dur = float(r['duration'])
@@ -459,17 +463,17 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
             stem = DEMUCS(normalise(mix, -1), device) if sep else mix
             x = features(normalise(stem, rnd.uniform(-3, -1)))
             y = targets(hits, len(x))
-            feats.append(x); targs.append(y); ids.append(r['id']); buf_s += len(x) / FPS
+            feats.append(x); targs.append(y); ids.append(key(r)); buf_s += len(x) / FPS
         except Exception as e:
-            log('skipped', r['id'], type(e).__name__, str(e)[:120])
-            done.add(r['id'])
+            log('skipped', key(r), type(e).__name__, str(e)[:120])
+            done.add(key(r))
             continue
         if buf_s >= cfg.shard_seconds:
             flush()
         if k % 25 == 0:
             log(f'{split}: {k + 1}/{len(rows)} clips, {(time.time() - t_start) / 60:.1f} min')
     flush()
-    log(f'{split}: ready ({len(done)} clips)')
+    log(f'{split}: ready ({len(done)} clips tried)')
 
 
 # ----------------------------------------------------------------------------- dataset
