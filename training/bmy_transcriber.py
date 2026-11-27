@@ -225,7 +225,7 @@ def sfz_kit(name: str, cfg):
     if name not in _SFZ:
         import sfz_kits
         path = sfz_kits.fetch_kit(name, cfg.kit_dir)
-        _SFZ[name] = sfz_kits.SfzKit(path, notes=sfz_kits.KITS[name].get('notes'), cache_mb=350)
+        _SFZ[name] = sfz_kits.SfzKit(path, notes=sfz_kits.KITS[name].get('notes'), cache_mb=1500)
     return _SFZ[name]
 
 

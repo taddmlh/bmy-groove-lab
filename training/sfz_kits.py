@@ -232,6 +232,9 @@ class Region:
 
 
 # ----------------------------------------------------------------------------- the kit
+_CACHE = {'data': OrderedDict(), 'bytes': 0, 'cap': 1500 << 20}
+
+
 class SfzKit:
     def __init__(self, sfz_path: str, notes: dict | None = None, cache_mb: int = 1500):
         raw, control = parse(sfz_path)
@@ -253,14 +256,15 @@ class SfzKit:
         self.cc = dict(control['cc'])
         self.own = dict(notes or {})                    # articulations listed for this kit: any of them, chosen per render
         self.notes = {**GM, **self.own}
-        self._cache, self._cache_bytes, self._cap = OrderedDict(), 0, cache_mb << 20
+        _CACHE['cap'] = cache_mb << 20                  # one sample cache shared by every kit in the session
         self.name = Path(sfz_path).stem
 
     # sample cache (mono float32 at 44.1 kHz)
     def sample(self, path):
-        if path in self._cache:
-            self._cache.move_to_end(path)
-            return self._cache[path]
+        c = _CACHE['data']
+        if path in c:
+            c.move_to_end(path)
+            return c[path]
         import soundfile as sf
         y, sr = sf.read(path, dtype='float32', always_2d=True)
         y = y.mean(axis=1)
@@ -268,11 +272,12 @@ class SfzKit:
             from scipy.signal import resample_poly
             g = math.gcd(SR, sr)
             y = resample_poly(y, SR // g, sr // g).astype(np.float32)
-        self._cache[path] = y
-        self._cache_bytes += y.nbytes
-        while self._cache_bytes > self._cap and len(self._cache) > 1:
-            _, old = self._cache.popitem(last=False)
-            self._cache_bytes -= old.nbytes
+        y = np.ascontiguousarray(y, np.float32)
+        c[path] = y
+        _CACHE['bytes'] += y.nbytes
+        while _CACHE['bytes'] > _CACHE['cap'] and len(c) > 1:
+            _, old = c.popitem(last=False)
+            _CACHE['bytes'] -= old.nbytes
         return y
 
     def regions_for(self, key, vel, cc, rnd):
@@ -301,13 +306,15 @@ class SfzKit:
 
     def render(self, hits, seconds, rnd=None, class_gain_db=None):
         """hits [(time_s, gm_or_td17_pitch, velocity)] -> (mono float32 at 44.1 kHz, the hits it could play).
-        Labels must come from the second value: a kit without (say) cymbals skips those hits."""
+        Labels must come from the second value: a kit without (say) cymbals skips those hits.
+        Two passes, so memory stays small: plan every voice (no audio), then mix them one at a time."""
         import random as _r
         rnd = rnd or _r.Random(0)
         n = int(seconds * SR)
         out = np.zeros(n + SR * 8, np.float32)
         res = {}
-        voices, played = [], []                           # voice: [start, sample, gain, off_by, stop, fade, articulation]
+        voices, played = [], []          # voice: [start, path, offset, cents, gain, stop, fade]
+        by_off, open_hats = {}, []       # voices a later note may choke: by off_by group, and ringing open hats
         for t, pitch, vel in sorted(hits):
             art = ART_OF_PITCH.get(pitch)
             if art is None:
@@ -324,38 +331,44 @@ class SfzKit:
                 continue
             played.append((t, pitch, vel))
             start = int(t * SR)
-            groups = {r.group for r in regs if r.group}
-            closing = art in ('hhClosed', 'hhPedal')     # closing the hats stops a ringing open hat, whatever the kit's groups say
-            for v in voices:                              # choke: new note in group G stops voices with off_by == G
-                if v[4] is None and v[0] < start and ((v[3] and v[3] in groups) or (closing and v[6] == 'hhOpen')):
-                    v[4] = (start, v[5] if not closing else max(v[5], 0.03))
+            for g in {r.group for r in regs if r.group}:  # choke: new note in group G stops voices with off_by == G
+                for v in by_off.pop(g, []):
+                    if v[5] is None and v[0] < start:
+                        v[5] = start
+            if art in ('hhClosed', 'hhPedal'):            # closing the hats stops a ringing open hat, whatever the kit's groups say
+                for v in open_hats:
+                    if v[5] is None and v[0] < start:
+                        v[5], v[6] = start, max(v[6], 0.03)
+                open_hats = []
             g_extra = 10 ** ((class_gain_db or {}).get(art, 0) / 20)
             for r in regs:
-                y = self.sample(r.path)
-                off = r.offset + int(sum(d * cc.get(c, 0) / 127 for c, d in r.offset_cc))
-                y = y[min(len(y), max(0, off)):]
-                cents = r.tune + sum(d * cc.get(c, 0) / 127 for c, d in r.tune_cc) + r.keytrack * (note - r.center)
-                if abs(cents) > 1:
-                    ratio = 2 ** (cents / 1200)
-                    idx = np.arange(0, len(y) - 1, ratio)
-                    y = np.interp(idx, np.arange(len(y)), y).astype(np.float32)
-                d = r.delay + sum(dd * cc.get(c, 0) / 127 for c, dd in r.delay_cc)
                 a = r.level(vel, cc) * g_extra
-                if a <= 1e-5 or len(y) == 0:
+                if a <= 1e-5:
                     continue
-                voices.append([start + int(d * SR), y, a, r.off_by, None, r.off_time, art])
-        for s, y, a, _, stop, _, _ in voices:
-            seg = y * a
+                off = r.offset + int(sum(d * cc.get(c, 0) / 127 for c, d in r.offset_cc))
+                cents = r.tune + sum(d * cc.get(c, 0) / 127 for c, d in r.tune_cc) + r.keytrack * (note - r.center)
+                d = r.delay + sum(dd * cc.get(c, 0) / 127 for c, dd in r.delay_cc)
+                v = [start + int(d * SR), r.path, max(0, off), cents, a, None, r.off_time]
+                voices.append(v)
+                if r.off_by:
+                    by_off.setdefault(r.off_by, []).append(v)
+                if art == 'hhOpen':
+                    open_hats.append(v)
+        for s, path, off, cents, a, stop, ft in voices:
+            if s >= len(out):
+                continue
+            y = self.sample(path)[off:]
+            end = len(y) if stop is None else min(len(y), max(0, stop - s) + int(ft * SR))
+            if abs(cents) > 1:                            # resample only the part that will sound
+                ratio = 2 ** (cents / 1200)
+                idx = np.arange(0, min(len(y) - 1, int(end * ratio) + 1), ratio)
+                y = np.interp(idx, np.arange(len(y)), y).astype(np.float32)
+            seg = y[:min(end, len(out) - s)] * np.float32(a)
             if stop is not None:
-                st, ft = stop
-                keep = max(0, st - s)
-                fade = int(ft * SR)
-                seg = seg[:keep + fade].copy()
+                keep = max(0, stop - s)
                 if len(seg) > keep:
                     seg[keep:] *= np.linspace(1, 0, len(seg) - keep, dtype=np.float32)
-            e = min(len(out), s + len(seg))
-            if e > s >= 0:
-                out[s:e] += seg[:e - s]
+            out[s:s + len(seg)] += seg
         return out[:n], played
 
 
