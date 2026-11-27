@@ -217,6 +217,40 @@ def drums_through_gs(hits, kit: int, seconds: float, sf2: str) -> np.ndarray:
         os.unlink(path)
 
 
+_SFZ = {}
+
+
+def sfz_kit(name: str, cfg):
+    """A free kit (cloned from github.com/sfzinstruments on first use), parsed once per session."""
+    if name not in _SFZ:
+        import sfz_kits
+        path = sfz_kits.fetch_kit(name, cfg.kit_dir)
+        _SFZ[name] = sfz_kits.SfzKit(path, notes=sfz_kits.KITS[name].get('notes'), cache_mb=350)
+    return _SFZ[name]
+
+
+def drums_through_sfz(hits, seconds: float, rnd: random.Random, cfg, split: str = 'train'):
+    """Re-render through a random free acoustic kit, with a random mix balance. Pieces the kit lacks (e.g. no
+    cymbals) come from a second kit. Returns (audio, hits actually played) -- labels must use the latter."""
+    import sfz_kits
+    names = [n for n in (cfg.sfz_kits or sfz_kits.KITS) if split != 'train' or n not in cfg.heldout_kits]
+    name = rnd.choice(names)
+    gains = {a: rnd.uniform(-6, 4) for a in sfz_kits.GM}           # the mix: per-piece level, +/- a few dB
+    for a in ('hhClosed', 'hhPedal', 'hhOpen'):
+        gains[a] = gains['hhClosed'] + rnd.uniform(-2, 2) if a != 'hhClosed' else rnd.uniform(-4, 6)
+    y, played = sfz_kit(name, cfg).render(hits, seconds, rnd, gains)
+    done = set(played)
+    rest = [h for h in hits if h not in done and h[1] in sfz_kits.ART_OF_PITCH]
+    if rest:
+        donor = rnd.choice([n for n in names if n != name] or names)
+        y2, played2 = sfz_kit(donor, cfg).render(rest, seconds, rnd, gains)
+        if played2:
+            r1, r2 = np.sqrt(np.mean(y ** 2)), np.sqrt(np.mean(y2 ** 2)) + 1e-9
+            y = y + y2 * (r1 / r2 * rnd.uniform(0.3, 0.8) if r1 > 0 else 1.0)
+        played = sorted(played + played2)
+    return y.astype(np.float32), played
+
+
 # ----------------------------------------------------------------------------- generated backing parts
 # GM programs that make Demucs work hard: basses, keys, guitars, organ, strings, pads, brass, synths
 BASSES = [32, 33, 34, 35, 36, 38, 39]
@@ -392,7 +426,11 @@ class PrepConfig:
     train_hours: float = 40.0
     val_hours: float = 2.0
     test_hours: float = 2.0
-    p_gs_kit: float = 0.12              # re-render the performance through a GeneralUser GS kit
+    p_gs_kit: float = 0.10              # re-render the performance through a GeneralUser GS kit
+    p_sfz_kit: float = 0.45             # ... or through a free multi-sampled acoustic kit (sfz_kits.KITS); the rest: E-GMD's TD-17 audio
+    sfz_kits: tuple = ()                # which free kits ('' = all in sfz_kits.KITS)
+    kit_dir: str = '/content/kits'      # where the free kits are cloned (local disk, not Drive)
+    heldout_kits: tuple = ('naked',)    # never in training: validation / test only, so the scores include an unseen real kit
     p_clean: float = 0.15               # drums only, no backing, no Demucs (still augmented)
     p_demucs_solo: float = 0.15         # drums only, through Demucs (its artefacts without bleed)
     backing_db: tuple = (-9.0, 6.0)     # backing level relative to drums
@@ -444,7 +482,10 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
         try:
             hits = midi_hits(egmd.read(r['midi_filename']))
             dur = float(r['duration'])
-            if rnd.random() < cfg.p_gs_kit:
+            pick_src = rnd.random()
+            if pick_src < cfg.p_sfz_kit:
+                drums, hits = drums_through_sfz(hits, dur + 1, rnd, cfg, split)
+            elif pick_src < cfg.p_sfz_kit + cfg.p_gs_kit:
                 drums = drums_through_gs(hits, rnd.choice(GS_KITS), dur + 1, cfg.sf2)
             else:
                 drums = read_wav(egmd.read(r['audio_filename']))

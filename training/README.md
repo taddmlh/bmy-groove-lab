@@ -8,7 +8,8 @@ BMY Drummer is a commercial app, so its Build screen can't use ADTOF (CC BY-NC-S
 | Part | Source | Licence |
 |---|---|---|
 | Drum audio + aligned MIDI | E-GMD v1.0.0: 444 h, 43 Roland TD-17 kit presets (mostly acoustic-style), read file-by-file from the remote zip | CC BY 4.0 (credit Callender, Hawthorne, Engel 2020) |
-| Extra kit sounds | the same performances re-played through BMY's GeneralUser GS kits (12 %) | GeneralUser GS License v2.0 |
+| Free acoustic kits | the same performances re-played (45 %) through multi-sampled, multi-mic acoustic kits by `sfz_kits.py` (a small numpy SFZ renderer: velocity layers, round robin, mic mix, hi-hat choke), random per-piece levels; pieces a kit lacks come from a second kit. **Naked Drums is held out of training** (validation / test only). | Karoryfer Big Rusty, Swirly, Unruly, Gogodze Phu Vol II: CC0. SM Drums: public domain. DrumGizmo Muldjord + DRS kits (credit Lars Muldjord / DrumGizmo), Wilkinson Audio Naked Drums: **CC BY 4.0 — credit in BMY** |
+| Extra kit sounds | the same performances re-played through BMY's GeneralUser GS kits (10 %) | GeneralUser GS License v2.0 |
 | Backing instruments | generated here: random chord progressions → bass, comping (keys / guitars), pads, leads, rendered with FluidSynth + GeneralUser GS | ours |
 | Realism | per-clip EQ, room reverb, bus compression, saturation, lo-fi band-limit; drums mixed with backing at −9…+6 dB, then **Demucs htdemucs** (as in Groove Lab); 15 % clean drums, 15 % drums-only through Demucs | Demucs: MIT |
 | Model | CRNN: 2 conv blocks (32, 64 ch) → 256 → 2-layer BiGRU (96) → 9 sigmoid outputs, ~1 M parameters | ours |
@@ -26,8 +27,11 @@ No commercial songs are used for training. Matt's Groove Lab stems are used **on
 ## Presets
 | | data | steps | time on a T4 |
 |---|---|---|---|
-| trial | 10 h train, 1 h validation, 1 h test | 15 000 | ~2 h total |
+| trial | 10 h train, 1 h validation, 1 h test (TD-17 + GeneralUser only) | 15 000 | ~2 h total |
+| kits | as trial, with the free acoustic kits | 15 000 | ~2 h total |
 | full | 40 h train, 2 h validation, 2 h test | 40 000 | ~6 h total, over 2 sessions |
 
 ## Testing
 `bmy_transcriber.py` is tested on CPU with a fake E-GMD (grooves rendered from BMY's kit samples), stand-ins for FluidSynth and Demucs: data preparation and resume, training and resume, evaluation, threshold tuning, ONNX export with a PyTorch-vs-ONNX parity check. Remote E-GMD access, FluidSynth and Demucs run for real only in Colab (the notebook's step 3 checks them on one clip first).
+
+`sfz_kits.py` is checked on Gogodze and Muldjord: every rendered hit lands on its MIDI time, closed / pedal hats choke a ringing open hat, and only hits a kit actually played are labelled. First result: the trial model reads Gogodze's (real, miked) hats as snare (31 snares for 12), the same fault seen on Matt's stems, which is why the kits were added.
