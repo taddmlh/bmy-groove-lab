@@ -407,8 +407,16 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
     done_path = out / 'done.json'
     done = set(json.load(open(done_path))) if done_path.exists() else set()
     hours = {'train': cfg.train_hours, 'validation': cfg.val_hours, 'test': cfg.test_hours}[split]
-    rows = [r for r in egmd.select(split, hours, seed=cfg.seed) if r['id'] not in done]
-    log(f'{split}: {len(rows)} clips to prepare ({len(done)} already done)')
+    have = sum(int(np.load(p)['lens'].sum()) for p in out.glob('shard_*.npz')) / FPS     # seconds already prepared
+    need = hours * 3600 - have
+    rows, tot = [], 0.0                                  # clips not tried yet, until the target hours are covered
+    for r in egmd.select(split, 1e9, seed=cfg.seed):
+        if tot >= need:
+            break
+        if r['id'] in done:
+            continue
+        rows.append(r); tot += float(r['duration'])
+    log(f'{split}: {len(rows)} clips to prepare ({have / 3600:.1f} h of {hours} h done, {len(done)} clips tried)')
     feats, targs, ids, buf_s = [], [], [], 0.0
     shard = len(list(out.glob('shard_*.npz')))
     t_start = time.time()
@@ -444,9 +452,10 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
                 mix, sep = drums, True
             else:
                 bpm = float(r['bpm']) if r.get('bpm') else rnd.uniform(70, 160)
-                back = render_backing(len(drums) / SR, bpm, rnd.randrange(1 << 30), cfg.sf2)
+                back = render_backing(len(drums) / SR + 0.1, bpm, rnd.randrange(1 << 30), cfg.sf2)
+                back = np.pad(back, (0, max(0, len(drums) - len(back))))[:len(drums)]   # exactly the drums' length
                 back = back / (np.sqrt(np.mean(back ** 2)) + 1e-9) * np.sqrt(np.mean(drums ** 2)) * 10 ** (rnd.uniform(*cfg.backing_db) / 20)
-                mix, sep = drums + back[:len(drums)], True
+                mix, sep = drums + back, True
             stem = DEMUCS(normalise(mix, -1), device) if sep else mix
             x = features(normalise(stem, rnd.uniform(-3, -1)))
             y = targets(hits, len(x))
