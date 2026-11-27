@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import bmy_transcriber as bt                 # noqa: E402
 import sfz_kits                              # noqa: E402
-from scenarios import SCENARIOS              # noqa: E402
+from scenarios import SCENARIOS, TEMPO       # noqa: E402
 
 C9 = bt.CLASSES
 TO5 = {'kick': 'kick', 'snare': 'snare', 'tomHigh': 'tom', 'tomMid': 'tom', 'tomFloor': 'tom',
@@ -73,11 +73,22 @@ def build(args):
         hits = [h for h in fn() if h[1] in bt.PITCH_CLASS]
         for k in kits:
             y, played = render(hits, kits, k, None)
-            for cond in ('dry', 'mixed'):
-                z = y if cond == 'dry' else bt.augment(bt.normalise(y, -6), random.Random(zlib.crc32(f'{sname}{k}'.encode())))
+            conds = ('dry', 'mixed') + (('shaker',) if args.sf2 else ())
+            for cond in conds:
+                rs = random.Random(zlib.crc32(f'{sname}{k}'.encode()))
+                truth_hits = played
+                if cond == 'shaker':                      # + a shaker part locked to the groove: right answer = hi-hat
+                    bpm, feel = TEMPO[sname]
+                    aux, aux_hits = bt.render_aux(len(y) / bt.SR, bpm, rs, args.sf2, 0.3, feel, ['shaker'])
+                    aux = aux[:len(y)]
+                    truth_hits = sorted(played + [h for h in aux_hits if h[0] < len(y) / bt.SR - 1])
+                    z = y + aux / (np.sqrt(np.mean(aux ** 2)) + 1e-9) * np.sqrt(np.mean(y ** 2)) * 10 ** (-8 / 20)
+                    z = bt.augment(bt.normalise(z, -6), rs)
+                else:
+                    z = y if cond == 'dry' else bt.augment(bt.normalise(y, -6), rs)
                 base = out / 'audio' / f'{sname}__{k}__{cond}'
-                write_files(base, z, played)
-                truth[str(base) + '.wav'] = [(t, bt.PITCH_CLASS[p], v) for t, p, v in played]
+                write_files(base, z, truth_hits)
+                truth[str(base) + '.wav'] = [(t, bt.PITCH_CLASS[p], v) for t, p, v in truth_hits]
         print(f'rendered {sname}', flush=True)
     json.dump(truth, open(out / 'truth.json', 'w'))
     return truth
@@ -161,10 +172,11 @@ def report(S, truth, path):
     L = []
     w = L.append
     kits = sorted({Path(k).stem.split('__')[1] for k in truth})
+    conds = [c for c in ('dry', 'mixed', 'shaker') if any(Path(k).stem.endswith('__' + c) for k in truth)]
     scen = list(SCENARIOS)
     w('BMY TRANSCRIBER TEST RIG')
-    w(f'{len(truth)} files: {len(scen)} grooves x {len(kits)} kits ({", ".join(kits)}) x dry / mixed. '
-      f'Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
+    w(f'{len(truth)} files: {len(scen)} grooves x {len(kits)} kits ({", ".join(kits)}) x conditions. '
+      f'Conditions: {", ".join(conds)} (shaker = a shaker part added; its hits count as hi-hat). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
     w('naked = held out of BMY training (never heard). Others: different performances, but kits BMY trained on.\n')
     for label, s in S.items():
         cnt, classes = s['cnt'], s['classes']
@@ -174,13 +186,13 @@ def report(S, truth, path):
         tot = sum((cnt[('*', '*', '*', c)] for c in classes), np.zeros(3, int))
         p, r, f = prf(*tot)
         w(f'OVERALL  F1 {f:.3f}  precision {p:.3f}  recall {r:.3f}   (tp {tot[0]}, false {tot[1]}, missed {tot[2]})\n')
-        w(f'{"drum":10s}' + ''.join(f'{k[:9]:>10s}' for k in kits) + f'{"dry":>8s}{"mixed":>8s}{"all":>8s}   false / missed')
+        w(f'{"drum":10s}' + ''.join(f'{k[:9]:>10s}' for k in kits) + ''.join(f'{c:>8s}' for c in conds) + f'{"all":>8s}   false / missed')
         for c in classes:
             row = f'{c:10s}'
             for k in kits:
                 a = cnt[('*', k, 'dry', c)] + cnt[('*', k, 'mixed', c)]
                 row += f'{prf(*a)[2]:10.2f}' if a.sum() else f'{"-":>10s}'
-            for cond in ('dry', 'mixed'):
+            for cond in conds:
                 row += f'{prf(*cnt[("*", "*", cond, c)])[2]:8.2f}'
             a = cnt[('*', '*', '*', c)]
             row += f'{prf(*a)[2]:8.2f}   {a[1]:4d} / {a[2]:<4d}'
@@ -215,6 +227,7 @@ if __name__ == '__main__':
     ap.add_argument('--models', default=f'current={HERE.parent.parent / "models/bmy_drums.onnx"}')
     ap.add_argument('--node-dir', default='.', help='folder whose node_modules has onnxruntime-web')
     ap.add_argument('--no-adtof', action='store_true')
+    ap.add_argument('--sf2', default='', help='GeneralUser GS .sf2: adds a "shaker" condition (needs fluidsynth)')
     ap.add_argument('--skip-render', action='store_true')
     args = ap.parse_args()
     truth = json.load(open(Path(args.out) / 'truth.json')) if args.skip_render else build(args)

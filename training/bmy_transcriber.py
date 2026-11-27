@@ -350,6 +350,71 @@ def render_backing(seconds: float, bpm: float, seed: int, sf2: str) -> np.ndarra
         os.unlink(path)
 
 
+# ----------------------------------------------------------------------------- auxiliary percussion (unlabelled)
+# Shakers, tambourines, congas... land in the Demucs drum stem. Without them in training the model read a shaker
+# as snare (EWTRTW, 2026-11-27). Matt's call: shaker-type parts carry the groove, so they are labelled as closed
+# hi-hat (BMY users can move that lane to a percussion sample). Hand drums and bells are mixed in unlabelled.
+AUX = {'shaker': [82, 70, 69], 'tambourine': [54], 'cowbell': [56], 'claves': [75], 'woodblock': [76, 77],
+       'congas': [62, 63, 64], 'bongos': [60, 61], 'guiro': [73, 74], 'triangle': [81, 80], 'agogo': [67, 68]}
+
+
+def aux_percussion_midi(seconds: float, bpm: float, rnd: random.Random, t0: float = 0.0, feel: str | None = None, kinds=None):
+    """1-2 percussion parts locked to the groove's tempo: shaker-like on 8ths / 16ths / triplets, hand drums and
+    bells on sparser patterns. feel: 'straight', 'swing' (triplet) or None (random)."""
+    import pretty_midi
+    pm = pretty_midi.PrettyMIDI(initial_tempo=bpm)
+    ins = pretty_midi.Instrument(0, is_drum=True)
+    beat = 60.0 / bpm
+    feel = feel or rnd.choice(['straight', 'straight', 'swing'])
+    n_parts = 1 if rnd.random() < 0.7 else 2
+    kinds = kinds or rnd.sample(['shaker', 'shaker', 'tambourine', 'congas', 'bongos', 'cowbell', 'claves', 'woodblock', 'guiro',
+                        'triangle', 'agogo'], n_parts)
+    for kind in kinds:
+        notes = AUX[kind]
+        if kind in ('shaker', 'tambourine', 'guiro'):
+            per_beat = rnd.choice([2, 4]) if feel == 'straight' else 3
+            accents = {0} if per_beat != 4 else {0, 2}
+            mask = [1] * per_beat
+        elif kind in ('congas', 'bongos'):
+            per_beat = 4 if feel == 'straight' else 3
+            mask = [rnd.random() < 0.55 for _ in range(per_beat * 2)]
+            accents = {0}
+        else:                                                     # bells, claves, woodblock, triangle
+            per_beat = 2 if feel == 'straight' else 3
+            mask = [rnd.random() < 0.4 for _ in range(per_beat * 4)]
+            accents = {0}
+        step = beat / per_beat
+        note = rnd.choice(notes)
+        k, t = 0, t0 % (4 * beat)
+        base_vel = rnd.randint(55, 110)
+        while t < seconds:
+            if mask[k % len(mask)]:
+                v = base_vel + (15 if (k % per_beat) in accents else -10) + rnd.randint(-8, 8)
+                tt = t + rnd.uniform(-0.006, 0.006)
+                p = rnd.choice(notes) if kind in ('congas', 'bongos', 'agogo') else note
+                ins.notes.append(pretty_midi.Note(max(1, min(127, v)), p, max(0.0, tt), max(0.0, tt) + 0.08))
+            k += 1
+            t += step
+    pm.instruments.append(ins)
+    return pm
+
+
+AS_HAT = set(AUX['shaker'] + AUX['tambourine'] + AUX['guiro'])      # labelled as closed hi-hat (GM 42)
+
+
+def render_aux(seconds: float, bpm: float, rnd: random.Random, sf2: str, t0: float = 0.0, feel: str | None = None, kinds=None):
+    """-> (audio, hits to label): shaker-type notes come back as (time, 42, velocity); the rest is unlabelled."""
+    pm = aux_percussion_midi(seconds, bpm, rnd, t0, feel, kinds)
+    labels = sorted((round(n.start, 4), 42, n.velocity) for n in pm.instruments[0].notes if n.pitch in AS_HAT and n.start < seconds)
+    with tempfile.NamedTemporaryFile(suffix='.mid', delete=False) as f:
+        pm.write(f.name)
+        path = f.name
+    try:
+        return RENDER(path, sf2, seconds), labels
+    finally:
+        os.unlink(path)
+
+
 # ----------------------------------------------------------------------------- augmentation (drums only)
 def _biquad(y, b, a):
     from scipy.signal import lfilter
@@ -450,6 +515,7 @@ class PrepConfig:
     val_hours: float = 2.0
     test_hours: float = 2.0
     p_gs_kit: float = 0.10              # re-render the performance through a GeneralUser GS kit
+    p_aux: float = 0.35                 # add auxiliary percussion: shaker / tambourine labelled hhClosed, hand drums / bells unlabelled
     p_sfz_kit: float = 0.45             # ... or through a free multi-sampled acoustic kit (sfz_kits.KITS); the rest: E-GMD's TD-17 audio
     sfz_kits: tuple = ()                # which free kits ('' = all in sfz_kits.KITS)
     kit_dir: str = '/content/kits'      # where the free kits are cloned (local disk, not Drive)
@@ -513,6 +579,14 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
                 drums = drums_through_gs(hits, rnd.choice(GS_KITS), dur + 1, cfg.sf2)
             else:
                 drums = read_wav(egmd.read(r['audio_filename']))
+            if rnd.random() < cfg.p_aux:                             # shaker / tambourine (-> hi-hat) or hand drums / bells (unlabelled)
+                bpm_a = float(r['bpm']) if r.get('bpm') else rnd.uniform(70, 160)
+                t0 = min((h[0] for h in hits), default=0.0)
+                aux, aux_hits = render_aux(len(drums) / SR + 0.1, bpm_a, rnd, cfg.sf2, t0)
+                hits = sorted(list(hits) + [h for h in aux_hits if h[0] < len(drums) / SR])
+                aux = np.pad(aux, (0, max(0, len(drums) - len(aux))))[:len(drums)]
+                aux = aux / (np.sqrt(np.mean(aux ** 2)) + 1e-9) * np.sqrt(np.mean(drums ** 2)) * 10 ** (rnd.uniform(-18, -3) / 20)
+                drums = drums + aux
             drums = augment(normalise(drums, -6), rnd)
             mode = rnd.random()
             if mode < cfg.p_clean:

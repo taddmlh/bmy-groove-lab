@@ -176,3 +176,10 @@ def isolated():
 
 SCENARIOS = {f.__name__: f for f in [rock8, ghost16, kick_heavy, shuffle_triplets, open_close, ride_jazz,
                                      crash_accents, tom_fills, rudiments, linear_funk, isolated]}
+
+
+# tempo and feel of each groove (for the 'shaker' condition: a shaker part locked to the groove)
+TEMPO = {'rock8': (100, 'straight'), 'ghost16': (92, 'straight'), 'kick_heavy': (110, 'straight'),
+         'shuffle_triplets': (76, 'swing'), 'open_close': (100, 'straight'), 'ride_jazz': (140, 'swing'),
+         'crash_accents': (120, 'straight'), 'tom_fills': (100, 'straight'), 'rudiments': (90, 'straight'),
+         'linear_funk': (96, 'straight'), 'isolated': (100, 'straight')}
