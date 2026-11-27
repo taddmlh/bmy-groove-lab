@@ -1,16 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127f';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127f';
-import { detectGrid, barTimes } from './beats.js?b=20261127f';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127f';
-import { buildBank, bankFileName } from './bank.js?b=20261127f';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127f';
-import { oafHits, loadOaf } from './oaf.js?b=20261127f';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127f';
-import { denoise } from './denoise.js?b=20261127f';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127f';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127f';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127f';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127g';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127g';
+import { detectGrid, barTimes } from './beats.js?b=20261127g';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127g';
+import { buildBank, bankFileName } from './bank.js?b=20261127g';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127g';
+import { oafHits, loadOaf } from './oaf.js?b=20261127g';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127g';
+import { denoise } from './denoise.js?b=20261127g';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127g';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127g';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127g';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1268,6 +1268,9 @@ function exWhere(t) {                                 // "bar 12, beat 2&" from 
   const i = barAt(t);
   if (i < 0) return { bar: null, label: `${t.toFixed(2)} s` };
   const b = S.bars[i], pos = (t - b.start) / b.step, q = Math.round(pos), beat = Math.floor(q / 4) + 1, sub = ((q % 4) + 4) % 4;
+  const tp = pos * 3 / 4, tq = Math.round(tp);                 // triplet grid: 3 per beat
+  if (Math.abs(tp - tq) * 4 / 3 < Math.abs(pos - q) - 0.05 && tq % 3)          // nearer a triplet than a 16th: "beat 2 trip 3"
+    return { bar: barNo(i), label: `bar ${String(barNo(i)).padStart(3)}  beat ${Math.floor(tq / 3) + 1} trip ${(tq % 3) + 1}` };
   const off = Math.abs(pos - q) > 0.3 ? '~' : '';
   return { bar: barNo(i), label: `bar ${String(barNo(i)).padStart(3)}  beat ${beat}${['', 'e', '&', 'a'][sub] || ''}${off}` };
 }
@@ -1673,7 +1676,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27f';
+const BUILD = '2026-11-27g';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
