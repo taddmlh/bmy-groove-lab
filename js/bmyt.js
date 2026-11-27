@@ -2,7 +2,7 @@
 // models/bmy_drums.onnx + models/bmy_drums.json. Front end = training/bmy_transcriber.features():
 // -1 dBFS peak, periodic Hann, 2048-point FFT, hop 441 (100 fps), centred + reflect padding, power,
 // 128 HTK mel bands 30 Hz - 16 kHz (Slaney norm), ln(power + 1e-7).
-import { fft } from './dsp.js?b=20261127j';
+import { fft } from './dsp.js?b=20261127k';
 
 const SR = 44100, N = 2048, HOP = 441, NM = 128, K = N / 2 + 1, FMIN = 30, FMAX = 16000;
 export const BMYT_FPS = SR / HOP;
@@ -64,22 +64,22 @@ export async function loadBmyt(ort, url = `models/bmy_drums.onnx?v=${BMYT_V}`) {
 export const bmytAvailable = async () => { try { const r = await fetch(`models/bmy_drums.json?v=${BMYT_V}`, { method: 'HEAD', cache: 'no-store' }); return r.ok; } catch (e) { return false; } };
 
 /** Hits for x (mono, 44.1 kHz, -1 dBFS), times from 0: { time, cls, modelLane?, kind?, open?, p }. */
-export async function bmytHits(ort, x) {
+export async function bmytHits(ort, x, opt = {}) {      // opt.weak: also return peaks down to weak x threshold (flag weak)
   const { sess, meta } = await loadBmyt(ort);
   const { data, frames } = bmytFeatures(x);
   const out = await sess.run({ mel: new ort.Tensor('float32', data, [1, frames, NM]) });
   const p = out.onset.data, C = meta.classes.length, gap = meta.min_gap_frames || 3;
   const hits = [];
   meta.classes.forEach((name, c) => {
-    const thr = meta.thresholds[c];
+    const thr = meta.thresholds[c], lo = thr * (opt.weak || 1);
     let last = -1e9, lastP = 0;
     for (let f = 0; f < frames; f++) {
       const v = p[f * C + c];
-      if (v < thr) continue;
+      if (v < lo) continue;
       if (f > 0 && p[(f - 1) * C + c] > v) continue;
       if (f + 1 < frames && p[(f + 1) * C + c] >= v) continue;
-      if (f - last < gap) { if (v > lastP) { hits[hits.length - 1].time = f / BMYT_FPS; hits[hits.length - 1].p = v; last = f; lastP = v; } continue; }
-      hits.push({ time: f / BMYT_FPS, ...(MAP[name] || { cls: 'perc', perc: name }), p: v, model: name });
+      if (f - last < gap) { if (v > lastP) { const h = hits[hits.length - 1]; h.time = f / BMYT_FPS; h.p = v; h.conf = v / thr; h.weak = v < thr; last = f; lastP = v; } continue; }
+      hits.push({ time: f / BMYT_FPS, ...(MAP[name] || { cls: 'perc', perc: name }), p: v, model: name, conf: v / thr, weak: v < thr });
       last = f; lastP = v;
     }
   });

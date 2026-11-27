@@ -10,6 +10,8 @@ import { createRequire } from 'node:module';
 const args = process.argv.slice(2);
 const mi = args.indexOf('--model');
 const modelPath = mi >= 0 ? args.splice(mi, 2)[1] : null;
+const pi = args.indexOf('--play');                     // tempo file {wav: {bpm, start}}: run the playability pass
+const play = pi >= 0 ? JSON.parse(fs.readFileSync(args.splice(pi, 2)[1], 'utf8')) : null;
 const [repo, which, outFile, ...wavs] = args;
 const require = createRequire(path.join(process.cwd(), 'x.js'));
 const ort = require('onnxruntime-web');
@@ -53,22 +55,37 @@ function normalise(raw) {                             // exactly as app.js trans
 
 const js = f => import(pathToFileURL(path.join(repo, 'js', f)).href);
 const out = {};
+const { logSpec } = await js('dsp.js');
+const { describeHits } = await js('transcribe.js');
+const { playability } = await js('playable.js');
+const stats = { added: 0, dropped: 0, impossible: 0 }, dump = {};
+function finish(w, mono, hits) {                       // as Groove Lab: features, then the playability pass
+  if (!play) return hits.filter(h => !h.weak);
+  const sp = logSpec(mono);
+  describeHits(hits, sp.data, sp.frames, 0);
+  const { bpm, start } = play[w], bar = 240 / bpm, bars = [];
+  for (let t = start; t < mono.length / 44100; t += bar) bars.push({ start: t, end: t + bar, step: bar / 16 });
+  if (process.env.RIG_DUMP) { dump[w] = { bars, hits: hits.map(h => ({ time: h.time, cls: h.cls, model: h.model, conf: h.conf, weak: h.weak, levelDb: h.levelDb })) }; }
+  const r = playability(hits, bars);
+  stats.added += r.added; stats.dropped += r.dropped; stats.impossible += r.impossible;
+  return r.hits;
+}
 if (which === 'adtof') {
-  const { logSpec } = await js('dsp.js');
-  const A = await js('adtof.js');
+    const A = await js('adtof.js');
   await A.loadAdtof(ort, path.join(repo, 'models/adtof.onnx'));
   for (const w of wavs) {
     const mono = normalise(readWav(w));
     const { act, frames } = await A.activations(ort, mono, logSpec(mono));
-    out[w] = A.hitsFrom(act, frames).map(h => ({ time: +h.time.toFixed(3), cls: h.cls }));
+    out[w] = finish(w, mono, A.hitsFrom(act, frames, play ? 0.6 : 1)).map(h => ({ time: +h.time.toFixed(3), cls: h.cls }));
   }
 } else {
   const B = await js('bmyt.js');
   await B.loadBmyt(ort, modelPath || path.join(repo, 'models/bmy_drums.onnx'));
   for (const w of wavs) {
     const mono = normalise(readWav(w));
-    out[w] = (await B.bmytHits(ort, mono)).map(h => ({ time: +h.time.toFixed(3), cls: h.cls, model: h.model }));
+    out[w] = finish(w, mono, await B.bmytHits(ort, mono, { weak: play ? 0.5 : 1 })).map(h => ({ time: +h.time.toFixed(3), cls: h.cls, model: h.model }));
   }
 }
 fs.writeFileSync(outFile, JSON.stringify(out));
-console.log(`${which}: ${wavs.length} files -> ${outFile}`);
+if (process.env.RIG_DUMP) fs.writeFileSync(outFile.replace(/\.json$/, '.cands.json'), JSON.stringify(dump));
+console.log(`${which}${play ? '+play' : ''}: ${wavs.length} files -> ${outFile}${play ? ` (playability: +${stats.added} recovered, -${stats.dropped} one-offs, -${stats.impossible} impossible)` : ''}`);

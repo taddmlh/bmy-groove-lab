@@ -1,6 +1,6 @@
 // ADTOF drum transcription (Frame_RNN, 5 classes) via onnxruntime-web.
 // Model: ADTOF-pytorch weights (xavriley/ADTOF-pytorch) exported to ONNX, parity 7e-7 vs PyTorch.
-import { logSpec, NBANDS, FPS } from './dsp.js?b=20261127j';
+import { logSpec, NBANDS, FPS } from './dsp.js?b=20261127k';
 
 export const CLASSES = ['kick', 'snare', 'tom', 'hihat', 'cymbal'];   // GM 35, 38, 47, 42, 49
 export const THRESHOLDS = [0.22, 0.24, 0.32, 0.22, 0.30];
@@ -58,12 +58,13 @@ export function pickPeaks(act, frames, cls, threshold) {
     else { flush(); group = [peaks[i]]; }
   }
   flush();
-  return kept.map(f => ({ frame: f, time: f / FPS, strength: x[f] }));
+  return kept.map(f => ({ frame: f, time: f / FPS, strength: x[f], proc: proc[f] }));
 }
 
 /** All hits: [{time, cls: 'kick'|..., frame, strength}] sorted by time. */
-export function hitsFrom(act, frames) {
+export function hitsFrom(act, frames, weak = 1) {      // weak < 1: also peaks down to weak x threshold (flag weak)
   const out = [];
-  CLASSES.forEach((name, c) => pickPeaks(act, frames, c, THRESHOLDS[c]).forEach(p => out.push({ ...p, cls: name })));
+  CLASSES.forEach((name, c) => pickPeaks(act, frames, c, THRESHOLDS[c] * weak)
+    .forEach(p => out.push({ ...p, cls: name, conf: p.proc / THRESHOLDS[c], weak: p.proc < THRESHOLDS[c] })));
   return out.sort((a, b) => a.time - b.time);
 }

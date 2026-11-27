@@ -91,6 +91,7 @@ def build(args):
                 truth[str(base) + '.wav'] = [(t, bt.PITCH_CLASS[p], v) for t, p, v in truth_hits]
         print(f'rendered {sname}', flush=True)
     json.dump(truth, open(out / 'truth.json', 'w'))
+    json.dump({w: {'bpm': TEMPO[Path(w).stem.split('__')[0]][0], 'start': 0.3} for w in truth}, open(out / 'tempo.json', 'w'))
     return truth
 
 
@@ -103,6 +104,9 @@ def transcribe(args, wavs):
     for spec in args.models.split(','):
         label, path = spec.split('=')
         jobs.append((f'BMY-{label}', ['bmy', '--model', str(Path(path).resolve())]))
+    if args.play:                                         # the same, through Groove Lab's playability pass
+        tempo = str(Path(args.out).resolve() / 'tempo.json')
+        jobs += [(l + '+play', a + ['--play', tempo]) for l, a in list(jobs)]
     out = {}
     for label, a in jobs:
         f = res_dir / f'{label}.json'
@@ -139,8 +143,8 @@ def prf(tp, fp, fn):
 def score(truth, results):
     """-> per transcriber: counts per (scenario, kit, cond, class) and confusion / ghost notes."""
     S = {}
-    runs = [(l, r, l == 'ADTOF') for l, r in results.items()]
-    runs += [(l + ' (as 5 classes, like ADTOF)', r, True) for l, r in results.items() if l != 'ADTOF']
+    runs = [(l, r, l.startswith('ADTOF')) for l, r in results.items()]
+    runs += [(l + ' (as 5 classes, like ADTOF)', r, True) for l, r in results.items() if not l.startswith('ADTOF')]
     for label, res, five in runs:
         classes = C5 if five else C9
         cnt = defaultdict(lambda: np.zeros(3, int))       # key -> tp, fp, fn
@@ -176,7 +180,7 @@ def report(S, truth, path):
     scen = list(SCENARIOS)
     w('BMY TRANSCRIBER TEST RIG')
     w(f'{len(truth)} files: {len(scen)} grooves x {len(kits)} kits ({", ".join(kits)}) x conditions. '
-      f'Conditions: {", ".join(conds)} (shaker = a shaker part added; right answer: BMY 'shaker', nothing for ADTOF). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
+      f'Conditions: {", ".join(conds)} (shaker = a shaker part added; right answer: BMY shaker, nothing for ADTOF). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
     w('naked = held out of BMY training (never heard). Others: different performances, but kits BMY trained on.\n')
     for label, s in S.items():
         cnt, classes = s['cnt'], s['classes']
@@ -229,6 +233,7 @@ if __name__ == '__main__':
     ap.add_argument('--no-adtof', action='store_true')
     ap.add_argument('--sf2', default='', help='GeneralUser GS .sf2: adds a "shaker" condition (needs fluidsynth)')
     ap.add_argument('--skip-render', action='store_true')
+    ap.add_argument('--play', action='store_true', help='also score each transcriber after the playability pass')
     args = ap.parse_args()
     truth = json.load(open(Path(args.out) / 'truth.json')) if args.skip_render else build(args)
     results = transcribe(args, list(truth))

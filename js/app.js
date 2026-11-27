@@ -1,16 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127j';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127j';
-import { detectGrid, barTimes } from './beats.js?b=20261127j';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261127j';
-import { buildBank, bankFileName } from './bank.js?b=20261127j';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127j';
-import { oafHits, loadOaf } from './oaf.js?b=20261127j';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127j';
-import { denoise } from './denoise.js?b=20261127j';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127j';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261127j';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127j';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127k';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127k';
+import { detectGrid, barTimes } from './beats.js?b=20261127k';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261127k';
+import { buildBank, bankFileName } from './bank.js?b=20261127k';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127k';
+import { oafHits, loadOaf } from './oaf.js?b=20261127k';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127k';
+import { denoise } from './denoise.js?b=20261127k';
+import { playability } from './playable.js?b=20261127k';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127k';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261127k';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127k';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -909,10 +910,11 @@ async function transcribeRegion(o, a, b) {
   const mono = gain === 1 ? raw : raw.map(v => v * gain);
   log(`Stem ${a.toFixed(1)}–${b.toFixed(1)} s peaked at ${(20 * Math.log10(peak || 1e-9)).toFixed(1)} dBFS; normalised by ${(20 * Math.log10(gain)).toFixed(1)} dB for transcription`);
   const spec = logSpec(mono);
+  const smart = playOn() && model !== 'oaf';   // playability pass: also take near-misses, then keep what a drummer played
   let hits;
   if (model === 'bmy') {                  // BMY's own model (training/)
     const t = performance.now();
-    hits = (await bmytHits(o, mono)).map(h => ({ ...h, time: h.time + s0 / SR }));
+    hits = (await bmytHits(o, mono, { weak: 1 })).map(h => ({ ...h, time: h.time + s0 / SR }));
     log(`BMY transcriber: ${hits.length} hits in ${((performance.now() - t) / 1000).toFixed(1)} s`);
   } else if (model === 'oaf') {          // Magenta OaF Drums (licence-friendly candidate for BMY)
     const t = performance.now();
@@ -921,9 +923,15 @@ async function transcribeRegion(o, a, b) {
     log(`Magenta transcriber: ${hits.length} hits in ${((performance.now() - t) / 1000).toFixed(1)} s${fixed ? `; ${fixed} "snare" hit(s) re-read as hi-hat` : ''}`);
   } else {
     const { act, frames } = await activations(o, mono, spec);
-    hits = hitsFrom(act, frames).map(h => ({ ...h, time: h.time + s0 / SR }));
+    hits = hitsFrom(act, frames, 1).map(h => ({ ...h, time: h.time + s0 / SR }));
   }
   describeHits(hits, spec.data, spec.frames, Math.round(s0 / SR * FPS));
+  if (smart) {
+    const bars = S.bars.filter(x => x.end > a && x.start < b);
+    const r = playability(hits, bars);
+    log(`Playability (${r.bars} bars): ${r.dropped} quiet one-off(s) dropped, ${r.impossible} needing a third hand dropped${r.notes.length ? '; ' + r.notes.join('; ') : ''}`);
+    hits = r.hits;
+  } else hits = hits.filter(h => !h.weak);
   // per-drum level jumps (band spectral flux): finds quiet second strokes the transcriber misses
   const flux = new Float32Array(spec.frames * 5);
   CLASSES.forEach((cls, c) => {
@@ -934,6 +942,9 @@ async function transcribeRegion(o, a, b) {
   S.hits = S.hits.filter(h => h.time < a || h.time >= b).concat(hits).sort((x, y) => x.time - y.time);
   log(`Hits in ${a.toFixed(1)}–${b.toFixed(1)} s: ${countBy(hits)}`);
 }
+const playOn = () => localStorage.getItem('bmyGLPlay') !== '0';     // default on
+$('playSel').checked = playOn();
+$('playSel').onchange = () => { localStorage.setItem('bmyGLPlay', $('playSel').checked ? '1' : '0'); status('Playability ' + ($('playSel').checked ? 'on' : 'off') + ': Re-transcribe to apply.'); };
 const countBy = hs => Object.entries(hs.reduce((m, h) => ((m[h.cls] = (m[h.cls] || 0) + 1), m), {})).map(([k, v]) => `${k} ${v}`).join(', ');
 
 /** (Re)build patterns for marked bars that have drums. force: also rebuild edited ones. */
@@ -1701,7 +1712,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27j';
+const BUILD = '2026-11-27k';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
