@@ -27,8 +27,14 @@ FPS = SR / HOP
 NFFT = 2048
 NMELS = 128
 FMIN, FMAX = 30.0, 16000.0
-CLASSES = ['kick', 'snare', 'tomHigh', 'tomMid', 'tomFloor', 'hhClosed', 'hhOpen', 'crash', 'ride']
-# E-GMD (Roland TD-17) note numbers -> class. Unlisted notes (tambourine, cowbell, clave...) are ignored.
+CLASSES = ['kick', 'snare', 'tomHigh', 'tomMid', 'tomFloor', 'hhClosed', 'hhOpen', 'crash', 'ride',
+           'shaker', 'tambourine', 'bell', 'handDrum', 'wood']
+# The last five are auxiliary percussion (added 2026-11-27): Groove Lab puts the busiest three on BMY's
+# One-shot A/B/C lanes, tagged with a GM note (PERC_GM). Matt: shaker-type parts carry the groove.
+PERC = ['shaker', 'tambourine', 'bell', 'handDrum', 'wood']
+PERC_GM = {'shaker': (82, 'Shaker'), 'tambourine': (54, 'Tambourine'), 'bell': (56, 'Cowbell'),
+           'handDrum': (63, 'Conga'), 'wood': (76, 'Woodblock')}
+# E-GMD (Roland TD-17) / GM note numbers -> class. Unlisted notes are ignored.
 PITCH_CLASS = {
     36: 'kick', 35: 'kick',
     38: 'snare', 40: 'snare', 37: 'snare', 39: 'snare',
@@ -39,6 +45,11 @@ PITCH_CLASS = {
     46: 'hhOpen', 26: 'hhOpen',
     49: 'crash', 55: 'crash', 57: 'crash', 52: 'crash',
     51: 'ride', 59: 'ride', 53: 'ride',
+    69: 'shaker', 70: 'shaker', 82: 'shaker', 73: 'shaker', 74: 'shaker',     # cabasa, maracas, shaker, guiro
+    54: 'tambourine',
+    56: 'bell', 67: 'bell', 68: 'bell', 80: 'bell', 81: 'bell',               # cowbell, agogo, triangle
+    60: 'handDrum', 61: 'handDrum', 62: 'handDrum', 63: 'handDrum', 64: 'handDrum', 65: 'handDrum', 66: 'handDrum',
+    75: 'wood', 76: 'wood', 77: 'wood',                                       # claves, woodblocks
 }
 # TD-17 extras GeneralUser GS doesn't have, mapped to the nearest GM drum when re-rendering through GS kits
 TD17_TO_GM = {22: 42, 26: 46, 58: 43, 55: 49, 52: 57, 59: 51}
@@ -352,8 +363,8 @@ def render_backing(seconds: float, bpm: float, seed: int, sf2: str) -> np.ndarra
 
 # ----------------------------------------------------------------------------- auxiliary percussion (unlabelled)
 # Shakers, tambourines, congas... land in the Demucs drum stem. Without them in training the model read a shaker
-# as snare (EWTRTW, 2026-11-27). Matt's call: shaker-type parts carry the groove, so they are labelled as closed
-# hi-hat (BMY users can move that lane to a percussion sample). Hand drums and bells are mixed in unlabelled.
+# (a cabasa, in EWTRTW) as snare. Matt's call: they carry the groove, so they are labelled as their own classes
+# (PERC) and Groove Lab puts them on BMY's one-shot lanes with a GM tag.
 AUX = {'shaker': [82, 70, 69], 'tambourine': [54], 'cowbell': [56], 'claves': [75], 'woodblock': [76, 77],
        'congas': [62, 63, 64], 'bongos': [60, 61], 'guiro': [73, 74], 'triangle': [81, 80], 'agogo': [67, 68]}
 
@@ -399,13 +410,10 @@ def aux_percussion_midi(seconds: float, bpm: float, rnd: random.Random, t0: floa
     return pm
 
 
-AS_HAT = set(AUX['shaker'] + AUX['tambourine'] + AUX['guiro'])      # labelled as closed hi-hat (GM 42)
-
-
 def render_aux(seconds: float, bpm: float, rnd: random.Random, sf2: str, t0: float = 0.0, feel: str | None = None, kinds=None):
-    """-> (audio, hits to label): shaker-type notes come back as (time, 42, velocity); the rest is unlabelled."""
+    """-> (audio, hits to label as (time, gm_note, velocity)); every note maps to a PERC class via PITCH_CLASS."""
     pm = aux_percussion_midi(seconds, bpm, rnd, t0, feel, kinds)
-    labels = sorted((round(n.start, 4), 42, n.velocity) for n in pm.instruments[0].notes if n.pitch in AS_HAT and n.start < seconds)
+    labels = sorted((round(n.start, 4), n.pitch, n.velocity) for n in pm.instruments[0].notes if n.pitch in PITCH_CLASS and n.start < seconds)
     with tempfile.NamedTemporaryFile(suffix='.mid', delete=False) as f:
         pm.write(f.name)
         path = f.name
@@ -515,7 +523,7 @@ class PrepConfig:
     val_hours: float = 2.0
     test_hours: float = 2.0
     p_gs_kit: float = 0.10              # re-render the performance through a GeneralUser GS kit
-    p_aux: float = 0.35                 # add auxiliary percussion: shaker / tambourine labelled hhClosed, hand drums / bells unlabelled
+    p_aux: float = 0.35                 # add auxiliary percussion parts (labelled as the PERC classes)
     p_sfz_kit: float = 0.45             # ... or through a free multi-sampled acoustic kit (sfz_kits.KITS); the rest: E-GMD's TD-17 audio
     sfz_kits: tuple = ()                # which free kits ('' = all in sfz_kits.KITS)
     kit_dir: str = '/content/kits'      # where the free kits are cloned (local disk, not Drive)
@@ -538,6 +546,9 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
     legacy = bool(done) and not any(k.endswith('.wav') for k in done)
     key = (lambda r: r['id']) if legacy else (lambda r: r['audio_filename'])
     hours = {'train': cfg.train_hours, 'validation': cfg.val_hours, 'test': cfg.test_hours}[split]
+    for p in sorted(out.glob('shard_*.npz'))[:1]:
+        if np.load(p)['y'].shape[1] != len(CLASSES):
+            raise ValueError(f'{out} holds data for a different set of drum classes: use a new preset / folder')
     have = sum(int(np.load(p)['lens'].sum()) for p in out.glob('shard_*.npz')) / FPS     # seconds already prepared
     need = hours * 3600 - have
     rows, tot = [], 0.0                                  # clips not tried yet, until the target hours are covered
@@ -579,7 +590,7 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
                 drums = drums_through_gs(hits, rnd.choice(GS_KITS), dur + 1, cfg.sf2)
             else:
                 drums = read_wav(egmd.read(r['audio_filename']))
-            if rnd.random() < cfg.p_aux:                             # shaker / tambourine (-> hi-hat) or hand drums / bells (unlabelled)
+            if rnd.random() < cfg.p_aux:                             # shaker, tambourine, bells, hand drums, woodblocks (labelled)
                 bpm_a = float(r['bpm']) if r.get('bpm') else rnd.uniform(70, 160)
                 t0 = min((h[0] for h in hits), default=0.0)
                 aux, aux_hits = render_aux(len(drums) / SR + 0.1, bpm_a, rnd, cfg.sf2, t0)
@@ -630,6 +641,10 @@ class Shards:
                 off += int(L)
         if not xs:
             raise FileNotFoundError(f'no shards in {folder}')
+        widths = {y.shape[1] for y in ys}
+        if widths != {len(CLASSES)}:
+            raise ValueError(f'{folder} was prepared for {sorted(widths)} drum classes, this code has {len(CLASSES)} '
+                             f'(percussion classes were added 2026-11-27): use a new preset / folder')
         self.x = np.concatenate(xs)
         self.y = np.concatenate(ys)
         self.clips = starts
@@ -763,6 +778,9 @@ def tune_thresholds(probs_all, grid=np.arange(0.15, 0.8, 0.05)):
     C = len(CLASSES)
     best = []
     for c in range(C):
+        if not sum(int((y[:, c] >= 255).sum()) for _, y in probs_all):
+            best.append(0.5)                                # no examples of this drum in validation: keep the default
+            continue
         scores = []
         for thr in grid:
             tp = fp = fn = 0

@@ -26,7 +26,7 @@ from scenarios import SCENARIOS, TEMPO       # noqa: E402
 
 C9 = bt.CLASSES
 TO5 = {'kick': 'kick', 'snare': 'snare', 'tomHigh': 'tom', 'tomMid': 'tom', 'tomFloor': 'tom',
-       'hhClosed': 'hihat', 'hhOpen': 'hihat', 'crash': 'cymbal', 'ride': 'cymbal'}
+       'hhClosed': 'hihat', 'hhOpen': 'hihat', 'crash': 'cymbal', 'ride': 'cymbal'}   # percussion: no 5-class equivalent
 C5 = ['kick', 'snare', 'tom', 'hihat', 'cymbal']
 TOL = 0.05                                   # 50 ms, as in the drum-transcription literature
 
@@ -150,13 +150,13 @@ def score(truth, results):
             sname, kit, cond = Path(wav).stem.split('__')
             est = res.get(wav, [])
             for c in classes:
-                rc = [t for t, d, v in ref if (TO5[d] if five else d) == c]
+                rc = [t for t, d, v in ref if (TO5.get(d) if five else d) == c]
                 ec = [h['time'] for h in est if (h['cls'] if five else h.get('model')) == c]   # BMY's cls is already 5-class
                 pairs, miss, extra = match(rc, ec)
                 for key in [(sname, kit, cond, c), ('*', kit, cond, c), (sname, '*', '*', c), ('*', '*', cond, c), ('*', '*', '*', c)]:
                     cnt[key] += (len(pairs), len(extra), len(miss))
                 for e in extra:                           # what was actually there?
-                    near = sorted({(TO5[d] if five else d) for t, d, v in ref if abs(t - e) <= TOL} - {c})
+                    near = sorted({(TO5.get(d, d) if five else d) for t, d, v in ref if abs(t - e) <= TOL} - {c})
                     conf[(c, '+'.join(near) if near else 'nothing')] += 1
                 if c == 'snare':
                     got = {r for r, _ in pairs}
@@ -176,7 +176,7 @@ def report(S, truth, path):
     scen = list(SCENARIOS)
     w('BMY TRANSCRIBER TEST RIG')
     w(f'{len(truth)} files: {len(scen)} grooves x {len(kits)} kits ({", ".join(kits)}) x conditions. '
-      f'Conditions: {", ".join(conds)} (shaker = a shaker part added; its hits count as hi-hat). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
+      f'Conditions: {", ".join(conds)} (shaker = a shaker part added; right answer: BMY 'shaker', nothing for ADTOF). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
     w('naked = held out of BMY training (never heard). Others: different performances, but kits BMY trained on.\n')
     for label, s in S.items():
         cnt, classes = s['cnt'], s['classes']

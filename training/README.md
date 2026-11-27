@@ -18,7 +18,7 @@ No commercial songs are used for training. Matt's Groove Lab stems are used **on
 
 **Front end** (Groove Lab will compute the same in JavaScript): input scaled to a −1 dBFS peak; periodic Hann, 2048-point FFT, hop 441 (100 frames/s), centred frames with reflect padding; power → 128 HTK mel bands 30 Hz–16 kHz (Slaney area norm) → ln(power + 1e-7).
 
-**Classes:** kick (36), snare (38, 40, 37, 39), tomHigh (48, 50), tomMid (45, 47), tomFloor (43, 58), hhClosed (42, 22, 44), hhOpen (46, 26), crash (49, 55, 57, 52), ride (51, 59, 53).
+**Classes (14):** kick (36), snare (38, 40, 37, 39), tomHigh (48, 50), tomMid (45, 47), tomFloor (43, 58), hhClosed (42, 22, 44), hhOpen (46, 26), crash (49, 55, 57, 52), ride (51, 59, 53); percussion for BMY's one-shot lanes: shaker (69 cabasa, 70 maracas, 82 shaker, 73/74 guiro), tambourine (54), bell (56 cowbell, 67/68 agogo, 80/81 triangle), handDrum (60–66 bongos, congas, timbales), wood (75 claves, 76/77 woodblocks). Percussion comes from generated parts (35 % of clips, GeneralUser GS sounds, locked to the tempo).
 
 **Targets:** onset frame = 1, neighbours = 0.5. Loss: BCE with per-class positive weights (√ of imbalance, capped). Training: random 4 s crops, AdamW + one-cycle, mixed precision, small random gain/tilt on the features.
 
