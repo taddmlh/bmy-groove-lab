@@ -1,16 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127i';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127i';
-import { detectGrid, barTimes } from './beats.js?b=20261127i';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261127i';
-import { buildBank, bankFileName } from './bank.js?b=20261127i';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127i';
-import { oafHits, loadOaf } from './oaf.js?b=20261127i';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127i';
-import { denoise } from './denoise.js?b=20261127i';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127i';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261127i';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127i';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127j';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127j';
+import { detectGrid, barTimes } from './beats.js?b=20261127j';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261127j';
+import { buildBank, bankFileName } from './bank.js?b=20261127j';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127j';
+import { oafHits, loadOaf } from './oaf.js?b=20261127j';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127j';
+import { denoise } from './denoise.js?b=20261127j';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127j';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261127j';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127j';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -977,7 +977,51 @@ function ensureVisible(a, b) {
   if (a < S.view.start || b > S.view.start + vw) { S.view.start = a - (vw - (b - a)) / 2; clampView(); }
 }
 const SPAN = { t4: 4, t8: 2, t16: 1 };
-const glyphSize = v => 0.34 + (0.90 - 0.34) * Math.max(0, VEL.indexOf(v)) / 5;
+const glyphSize = v => 0.34 + (0.90 - 0.34) * Math.max(0, VEL.indexOf(v)) / 5;   // = BMY NoteGlyphMetrics.mainFraction (6 rungs)
+
+/** One note as BMY Drummer draws it (circular theme, BMY_NoteGlyph.swift): hit = circle; flam / drag / ruff = arcs
+ * to its left; double and 16th triplet = 2 / 3 pills in one step; 8th triplet = 3 pills over 2 steps, joined;
+ * quarter triplet = 3 circles over 4 steps, joined. Silent triplet notes are drawn hollow. W x H: the glyph's frame
+ * in px (span x cell pitch - 3, as BMY). */
+function noteSVG(c, color, W, H) {
+  const u = H * 0.90, cy = H / 2, mf = glyphSize(c.velocity);
+  const bits = (c.tripletPattern || '111').split('').map(b => b === '1');
+  const vels = [c.velocity, c.note2Velocity || c.velocity, c.note3Velocity || c.velocity];
+  const nf = i => glyphSize(vels[i]) * u;
+  const hollow = Math.max(0.6, u * 0.025), link = Math.max(1.5, u * 0.045);
+  let out = '';
+  const fillOr = (on, shape) => out += on ? shape.replace('/>', ` fill="${color}"/>`) : shape.replace('/>', ` fill="none" stroke="${color}" stroke-width="${hollow}"/>`);
+  const line = (x1, x2) => { if (x2 > x1) out += `<line x1="${x1}" y1="${cy}" x2="${x2}" y2="${cy}" stroke="${color}" stroke-width="${link}" stroke-linecap="round"/>`; };
+  const pill = (cx, w, h, on) => fillOr(on, `<rect x="${cx - w / 2}" y="${cy - h / 2}" width="${w}" height="${h}" rx="${w / 2}"/>`);
+  const circle = (cx, d, on) => fillOr(on, `<circle cx="${cx}" cy="${cy}" r="${d / 2}"/>`);
+  const arcs = (cx, r, halfAngles) => {                     // grace arcs, opening to the left of the hit
+    const lw = Math.max(1, u * 0.055), want = Math.max(2, u * 0.085) + lw;
+    const pitch = Math.min(want, Math.max(0, cx - r - lw / 2 - 0.5) / halfAngles.length);
+    halfAngles.forEach((a, i) => {
+      const R = r + pitch * (i + 1), t = Math.min(90, a) * Math.PI / 180, dx = R * Math.cos(t), dy = R * Math.sin(t);
+      out += `<path d="M${cx - dx} ${cy + dy}A${R} ${R} 0 0 1 ${cx - dx} ${cy - dy}" fill="none" stroke="${color}" stroke-width="${lw}" stroke-linecap="round"/>`;
+    });
+  };
+  const o = c.ornament;
+  if (o === 'double' || o === 't16' || o === 't8') {
+    const n = o === 'double' ? 2 : 3, w = Math.max(2, u * (o === 't16' ? 0.22 : 0.25));
+    let xs;
+    if (o === 't8') { const cw = (W + 3) / 2; xs = [cw / 2, cw, cw * 1.5]; }
+    else { const p = w + u * 0.14, x0 = W / 2 - p * (n - 1) / 2; xs = [...Array(n)].map((_, i) => x0 + p * i); }
+    if (o === 't8') for (let i = 0; i < 2; i++) line(xs[i] + w / 2, xs[i + 1] - w / 2);   // only spanning figures are joined
+    xs.forEach((x, i) => pill(x, w, n === 3 ? nf(i) : mf * u, bits[i]));
+  } else if (o === 't4') {
+    const gw = W + 3, cw = gw / 4, xs = [cw / 2, gw / 2, gw - cw / 2], ds = [0, 1, 2].map(i => nf(i) * 0.9);
+    for (let i = 0; i < 2; i++) line(xs[i] + ds[i] / 2, xs[i + 1] - ds[i + 1] / 2);
+    xs.forEach((x, i) => circle(x, ds[i], bits[i]));
+  } else {
+    const d = mf * u * 0.9;
+    circle(W / 2, d, true);
+    const g = { flam: [50], drag: [45, 27], ruff: [58, 54, 50], buzz: [58, 54, 50] }[o];
+    if (g) arcs(W / 2, d / 2, g);
+  }
+  return `<svg class="ng" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${out}</svg>`;
+}
 const GLYPHS = {
   crash: c => `<svg viewBox="0 0 32 32"><path d="M16 3l3 7 7-3-3 7 7 2-7 3 3 7-7-3-3 7-3-7-7 3 3-7-7-3 7-2-3-7 7 3z" fill="none" stroke="${c}" stroke-width="1.6"/><circle cx="16" cy="16" r="2" fill="none" stroke="${c}"/></svg>`,
   openHat: c => `<svg viewBox="0 0 32 32"><path d="M5 6h22L16 14zM5 26h22L16 18z" fill="none" stroke="${c}" stroke-width="1.8"/></svg>`,
@@ -1015,49 +1059,25 @@ function renderGrid() {
     const shot = S.oneShots && S.oneShots[l.role];
     row.innerHTML = `<div class="glyph" title="${l.role === 'closedHat' && p.hatUseAlt ? 'Ride (hat lane)' : shot ? `${l.name}: ${shot.name} (GM ${shot.gm})` : l.name}">${laneGlyph({ ...l, color })}${shot ? `<span class="shotTag">${esc(shot.name)}</span>` : ''}</div>`;
     row.firstChild.onclick = () => audition(audioCtx(), l.role === 'closedHat' && p.hatUseAlt ? 'ride' : l.role, 'n2');
-    const trips = p.cells.filter(c => c.lane === l.role && SPAN[c.ornament]);
+    const trips = p.cells.filter(c => c.lane === l.role && SPAN[c.ornament] > 1);
     for (let s = 0; s < 16; s++) {
       const cell = document.createElement('div');
-      const cov = trips.some(t => s >= t.step && s < t.step + SPAN[t.ornament]);
+      const cov = trips.some(t => s > t.step && s < t.step + SPAN[t.ornament]) || trips.some(t => s === t.step);
       cell.className = 'cell' + (s % 4 === 0 ? ' beat' : '') + (cov ? ' cov' : '');
-      const c = p.cells.find(x => x.lane === l.role && x.step === s && !SPAN[x.ornament]);
+      const c = p.cells.find(x => x.lane === l.role && x.step === s);
       if (c) cell._note = c;
       cell.onclick = () => editCell(l.role, s);
       row.appendChild(cell);
     }
-    // triplet notes drawn across their span
-    for (const t of trips) {
-      const span = SPAN[t.ornament], bits = t.tripletPattern || '111';
-      const vels = [t.velocity, t.note2Velocity || t.velocity, t.note3Velocity || t.velocity];
-      for (let k = 0; k < 3; k++) {
-        if (bits[k] !== '1') continue;
-        const pos = t.step + 0.5 + k * span / 3;      // centre of the note, in steps
-        const d = document.createElement('div'); d.className = 'trip';
-        const z = glyphSize(vels[k]);
-        d.dataset.z = z;
-        d.style.cssText = `left:calc(46px + (100% - 46px) * ${(pos / 16).toFixed(4)});background:${color};box-shadow:0 0 0 1px rgba(255,255,255,.55)`;
-        row.appendChild(d);
-      }
-    }
     g.appendChild(row);
     drawers.push(() => {
-    const side = Math.max(6, Math.min(px.h, px.w) - 4);
-    const dot = (parent, leftPct, z, extra = '') => {
-      const n = document.createElement('div'); n.className = 'note';
-      const d = Math.round(side * z);
-      n.style.cssText = `width:${d}px;height:${d}px;left:${leftPct.toFixed(1)}%;background:${color};${extra}`;
-      parent.appendChild(n);
-    };
-    [...row.children].slice(1).forEach((cell, s) => {
-      const c = cell._note; if (!c) return;
-      const z = glyphSize(c.velocity), x0 = 50 + shift(s) * 100;
-      if (c.ornament === 'double') { dot(cell, x0 - 18, z * 0.9); dot(cell, x0 + 22, z * 0.8); }
-      else if (c.ornament === 'flam') { dot(cell, x0 - 26, 0.32, 'opacity:.85'); dot(cell, x0 + 6, z); }
-      else dot(cell, x0, z);
-      if (c.ornament && !SPAN[c.ornament]) { const t = document.createElement('span'); t.className = 'orn'; t.textContent = c.ornament === 'double' ? 'Db' : c.ornament === 'flam' ? 'Fl' : c.ornament; cell.appendChild(t); }
-    });
-    // triplet notes, sized in px too
-    row.querySelectorAll('.trip').forEach(d => { const zz = +d.dataset.z; const dd = Math.round(side * zz * 0.8); d.style.width = dd + 'px'; d.style.height = dd + 'px'; });
+      const pitch = px.w + 2;                                  // cell + grid gap
+      [...row.children].slice(1).forEach((cell, s) => {
+        const c = cell._note; if (!c) return;
+        const span = SPAN[c.ornament] > 1 ? SPAN[c.ornament] : 1;
+        const W = span * pitch - 3, dx = span === 1 ? shift(s) * pitch * 0.65 : 0;   // BMY eases swing travel to 0.65
+        cell.insertAdjacentHTML('beforeend', noteSVG(c, color, W, px.h).replace('class="ng"', `class="ng" style="left:${0.5 + dx}px"`));
+      });
     });
   }
   { const r = g.querySelector('.row .cell').getBoundingClientRect(); px.h = r.height; px.w = r.width; }   // all 12 rows laid out
@@ -1681,7 +1701,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27i';
+const BUILD = '2026-11-27j';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
