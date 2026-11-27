@@ -2,7 +2,7 @@
 // models/bmy_drums.onnx + models/bmy_drums.json. Front end = training/bmy_transcriber.features():
 // -1 dBFS peak, periodic Hann, 2048-point FFT, hop 441 (100 fps), centred + reflect padding, power,
 // 128 HTK mel bands 30 Hz - 16 kHz (Slaney norm), ln(power + 1e-7).
-import { fft } from './dsp.js?b=20261127g';
+import { fft } from './dsp.js?b=20261127h';
 
 const SR = 44100, N = 2048, HOP = 441, NM = 128, K = N / 2 + 1, FMIN = 30, FMAX = 16000;
 export const BMYT_FPS = SR / HOP;
@@ -12,6 +12,9 @@ const MAP = {
   tomHigh: { cls: 'tom', modelLane: 'tomHigh' }, tomMid: { cls: 'tom', modelLane: 'tomMid' }, tomFloor: { cls: 'tom', modelLane: 'tomFloor' },
   hhClosed: { cls: 'hihat', open: false }, hhOpen: { cls: 'hihat', open: true },
   crash: { cls: 'cymbal', kind: 'crash' }, ride: { cls: 'cymbal', kind: 'ride' },
+  // percussion (models from 2026-11-27 on): Groove Lab puts the busiest three on One-shot A/B/C
+  shaker: { cls: 'perc', perc: 'shaker' }, tambourine: { cls: 'perc', perc: 'tambourine' }, bell: { cls: 'perc', perc: 'bell' },
+  handDrum: { cls: 'perc', perc: 'handDrum' }, wood: { cls: 'perc', perc: 'wood' },
 };
 
 const WIN = new Float64Array(N); for (let n = 0; n < N; n++) WIN[n] = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / N);
@@ -76,7 +79,7 @@ export async function bmytHits(ort, x) {
       if (f > 0 && p[(f - 1) * C + c] > v) continue;
       if (f + 1 < frames && p[(f + 1) * C + c] >= v) continue;
       if (f - last < gap) { if (v > lastP) { hits[hits.length - 1].time = f / BMYT_FPS; hits[hits.length - 1].p = v; last = f; lastP = v; } continue; }
-      hits.push({ time: f / BMYT_FPS, ...MAP[name], p: v, model: name });
+      hits.push({ time: f / BMYT_FPS, ...(MAP[name] || { cls: 'perc', perc: name }), p: v, model: name });
       last = f; lastP = v;
     }
   });

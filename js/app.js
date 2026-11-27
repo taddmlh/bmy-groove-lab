@@ -1,16 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127g';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127g';
-import { detectGrid, barTimes } from './beats.js?b=20261127g';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127g';
-import { buildBank, bankFileName } from './bank.js?b=20261127g';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127g';
-import { oafHits, loadOaf } from './oaf.js?b=20261127g';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127g';
-import { denoise } from './denoise.js?b=20261127g';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127g';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127g';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127g';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127h';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127h';
+import { detectGrid, barTimes } from './beats.js?b=20261127h';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261127h';
+import { buildBank, bankFileName } from './bank.js?b=20261127h';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127h';
+import { oafHits, loadOaf } from './oaf.js?b=20261127h';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127h';
+import { denoise } from './denoise.js?b=20261127h';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127h';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261127h';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127h';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -496,7 +496,7 @@ async function openSong({ key, name, bytes, type, buf }) {
 // ---------------------------------------------------------------- song memory
 function snapshot() {
   return {
-    v: 1, grid: { ...S.grid }, locked: !!S.locked, marks: [...S.marks], tab: S.tab, swing: { ...S.swing },
+    v: 1, grid: { ...S.grid }, locked: !!S.locked, marks: [...S.marks], tab: S.tab, swing: { ...S.swing }, oneShots: S.oneShots || {},
     sel: S.sel && { ...S.sel }, view: { ...S.view }, mixer: S.mixer, bankName: $('bankName').value,
     extracted: S.extracted.map(r => [...r]),
     hits: S.hits.map(h => ({ time: h.time, cls: h.cls, strength: h.strength, levelDb: h.levelDb, decay: h.decay, pitch: h.pitch, ...(h.fixedLane ? { lane: h.lane, fixedLane: true } : {}) })),
@@ -509,6 +509,7 @@ async function restoreState(st) {
   S.grid = { ...st.grid }; rebuildBars();
   S.locked = !!st.locked; S.marks = (st.marks || []).filter(i => i < S.bars.length);
   S.swing = st.swing || { type: 'Off', depth: 0 };
+  S.oneShots = st.oneShots || {}; setOneShotSounds(S.oneShots);
   S.perf = st.perf || null;
   if (S.perf) {   // keep the recorded loop as a base layer so new overdubs add to it
     const sr = S.mixBuf.sampleRate, a0 = Math.round(0.5 * sr), n = Math.round(240 / S.perf.bpm * S.perf.bars * sr);
@@ -940,6 +941,9 @@ function buildPatterns(force) {
   const bars = S.marks.filter(covered).map(i => S.bars[i]);
   if (!bars.length) return;
   assignLanes(S.hits, bars);
+  S.oneShots = percAllocation(S.hits, bars); setOneShotSounds(S.oneShots);
+  if (Object.keys(S.oneShots).length)
+    log('Percussion on the one-shot lanes: ' + Object.entries(S.oneShots).map(([l, x]) => `${l.slice(-1)} = ${x.name} (GM ${x.gm}, ${x.count} hits)`).join(', '));
   S.swing = detectSwing(S.hits, bars);
   const extra = doubleStrokes(bars);   // quiet second strokes of doubles
   const all = S.hits.concat(extra).sort((x, y) => x.time - y.time);
@@ -1008,7 +1012,8 @@ function renderGrid() {
   for (const l of LANES) {
     const row = document.createElement('div'); row.className = 'row';
     const color = l.role === 'closedHat' && p.hatUseAlt ? '#d9b326' : l.color;
-    row.innerHTML = `<div class="glyph" title="${l.role === 'closedHat' && p.hatUseAlt ? 'Ride (hat lane)' : l.name}">${laneGlyph({ ...l, color })}</div>`;
+    const shot = S.oneShots && S.oneShots[l.role];
+    row.innerHTML = `<div class="glyph" title="${l.role === 'closedHat' && p.hatUseAlt ? 'Ride (hat lane)' : shot ? `${l.name}: ${shot.name} (GM ${shot.gm})` : l.name}">${laneGlyph({ ...l, color })}${shot ? `<span class="shotTag">${esc(shot.name)}</span>` : ''}</div>`;
     row.firstChild.onclick = () => audition(audioCtx(), l.role === 'closedHat' && p.hatUseAlt ? 'ride' : l.role, 'n2');
     const trips = p.cells.filter(c => c.lane === l.role && SPAN[c.ornament]);
     for (let s = 0; s < 16; s++) {
@@ -1200,7 +1205,7 @@ const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platfor
 function makeBank() {
   const pats = S.marks.filter(i => S.patterns.has(i)).map(i => ({ name: `Bar ${barNo(i)}`, ...S.patterns.get(i) }));
   if (!pats.length) return null;
-  const bank = buildBank({ name: $('bankName').value || S.name, patterns: pats, swing: S.swing, bpm: S.grid.bpm });
+  const bank = buildBank({ name: $('bankName').value || S.name, patterns: pats, swing: S.swing, bpm: S.grid.bpm, oneShots: S.oneShots });
   return { bank, pats, fname: bankFileName(bank) };
 }
 const b64url = str => { const bytes = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
@@ -1676,7 +1681,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27g';
+const BUILD = '2026-11-27h';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;

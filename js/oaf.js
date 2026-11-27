@@ -3,7 +3,7 @@
 // (tools/oaf_export.py); output matches Magenta's TensorFlow model to ~1e-6.
 // Front end = Magenta's training spectrogram: 44.1 kHz mono, 2048-point STFT (periodic Hann, centred, reflect padding),
 // hop 512, 250 HTK mel bands from 30 Hz with Slaney area normalisation, power in dB (ref 1, floor 1e-10, top 80 dB).
-import { fft } from './dsp.js?b=20261127g';
+import { fft } from './dsp.js?b=20261127h';
 
 const SR = 44100, N = 2048, HOP = 512, NM = 250, K = N / 2 + 1;
 export const OAF_FPS = SR / HOP;

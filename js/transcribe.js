@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127g';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127h';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
@@ -23,8 +23,26 @@ export const VEL_MIDI = { gh: 28, sf: 46, n1: 66, n2: 82, a1: 102, a2: 116 };
 const bandsIn = (lo, hi) => { const r = []; for (let b = 0; b < NBANDS; b++) if (BAND_FREQ[b] >= lo && BAND_FREQ[b] < hi) r.push(b); return r; };
 const B = {
   kick: bandsIn(30, 150), snare: bandsIn(150, 5000), tom: bandsIn(60, 600),
-  hihat: bandsIn(5000, 16000), cymbal: bandsIn(3000, 16000), toneRange: bandsIn(60, 500)
+  hihat: bandsIn(5000, 16000), cymbal: bandsIn(3000, 16000), toneRange: bandsIn(60, 500), perc: bandsIn(200, 16000)
 };
+
+// ---- percussion -> one-shot lanes -----------------------------------------------------------
+// BMY's model hears five percussion types. The busiest three in the marked bars go to One-shot A/B/C, each tagged
+// with a GM note (training/bmy_transcriber.py PERC_GM) so BMY can play a matching sound. Matt, 2026-11-27.
+export const PERC = {
+  shaker: { gm: 82, name: 'Shaker' }, tambourine: { gm: 54, name: 'Tambourine' }, bell: { gm: 56, name: 'Cowbell' },
+  handDrum: { gm: 63, name: 'Conga' }, wood: { gm: 76, name: 'Woodblock' }
+};
+const SHOTS = ['oneShotA', 'oneShotB', 'oneShotC'];
+/** -> { oneShotA: {perc, gm, name, count}, ... } for the percussion heard in these bars (busiest first). */
+export function percAllocation(hits, bars) {
+  const inBars = h => bars.some(b => h.time >= b.start - b.step / 4 && h.time < b.end - b.step / 4);
+  const n = {};
+  for (const h of hits) if (h.cls === 'perc' && PERC[h.perc] && inBars(h)) n[h.perc] = (n[h.perc] || 0) + 1;
+  const order = Object.keys(PERC);
+  const ranked = Object.keys(n).sort((a, b) => n[b] - n[a] || order.indexOf(a) - order.indexOf(b)).slice(0, 3);
+  return Object.fromEntries(ranked.map((p, i) => [SHOTS[i], { perc: p, ...PERC[p], count: n[p] }]));
+}
 const lin = v => Math.pow(10, v) - 1;
 function energy(spec, frames, f, bands) {
   if (f < 0 || f >= frames) return 0;
@@ -90,6 +108,8 @@ function tomLanes(hits) {
 
 export function assignLanes(hits, bars) {
   const tm = tomLanes(hits);
+  const shots = percAllocation(hits, bars), shotOf = {};
+  for (const [lane, x] of Object.entries(shots)) shotOf[x.perc] = lane;
   for (const h of hits) {
     if (h.fixedLane) continue;                // Perform: the lane was chosen (lane mode) or taught (beatbox)
     if (h.cls === 'kick') h.lane = 'kick';
@@ -97,6 +117,7 @@ export function assignLanes(hits, bars) {
     else if (h.cls === 'tom') h.lane = h.modelLane || tm.get(Math.round(h.pitch)) || 'tomMid';          // BMY's model names the tom
     else if (h.cls === 'hihat') h.lane = h.open !== undefined ? (h.open ? 'openHat' : 'closedHat') : h.decay > 0.2 ? 'openHat' : 'closedHat';
     else if (h.cls === 'cymbal') h.lane = h.kind || 'crash';      // Magenta tells ride from crash; ADTOF doesn't
+    else if (h.cls === 'perc') h.lane = shotOf[h.perc] || null;    // a 4th / 5th percussion type: no lane left
   }
   // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
   for (const bar of bars) {
@@ -105,10 +126,11 @@ export function assignLanes(hits, bars) {
   }
   // Velocity: loudness against the median of the same instrument across the marked bars.
   const groups = {};
-  hits.forEach(h => { (groups[h.lane] = groups[h.lane] || []).push(h.levelDb); });
+  hits.forEach(h => { if (h.lane) (groups[h.lane] = groups[h.lane] || []).push(h.levelDb); });
   const med = {};
   for (const [k, v] of Object.entries(groups)) { const s = [...v].sort((a, b) => a - b); med[k] = s[Math.floor(s.length / 2)]; }
   for (const h of hits) {
+    if (!h.lane) continue;
     const d = h.levelDb - med[h.lane];
     h.vel = d > 4 ? 'a2' : d > 1.5 ? 'a1' : d > -2 ? 'n2' : d > -5 ? 'n1' : d > -10 ? 'sf' : 'gh';
   }
@@ -162,6 +184,7 @@ export function barToPattern(hits, bar, swing) {
   }
   const lanes = {};
   for (const h of inBar) {
+    if (!h.lane) continue;                                     // percussion beyond the three one-shot lanes
     let lane = h.lane === 'ride' ? 'closedHat' : h.lane;
     if (rideBar && h.lane === 'closedHat') continue;
     (lanes[lane] = lanes[lane] || []).push(h);

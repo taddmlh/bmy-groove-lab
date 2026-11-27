@@ -14,9 +14,9 @@ function sortKeys(v) {
 /**
  * patterns: [{ name, cells:[{lane, step, velocity, ornament?, tripletPattern, note2Velocity?, note3Velocity?}],
  *              hatUseAlt }]
- * swing: {type:'Off'|'1-8'|'1-16', depth 0..100}; bpm: number.
+ * swing: {type:'Off'|'1-8'|'1-16', depth 0..100}; bpm: number; oneShots: {oneShotA: {gm, name}, ...} (optional).
  */
-export function buildBank({ name, patterns, swing, bpm }) {
+export function buildBank({ name, patterns, swing, bpm, oneShots }) {
   if (!patterns.length || patterns.length > 6) throw new Error('A bank needs 1 to 6 patterns');
   const sw = swing && swing.type !== 'Off' ? { type: swing.type, depth: Math.max(0, Math.min(100, Math.round(swing.depth))) } : { type: 'Off', depth: 0 };
   const bank = {
@@ -44,6 +44,10 @@ export function buildBank({ name, patterns, swing, bpm }) {
       };
     })
   };
+  // which sound each one-shot lane holds (GM note + name), from the transcriber. BMY ignores unknown keys until
+  // it reads this (planned: built-in kit sound per one-shot, MIDI-out hint).
+  if (oneShots && Object.keys(oneShots).length)
+    bank.oneShotSounds = Object.fromEntries(Object.entries(oneShots).map(([lane, x]) => [lane, { gmNote: x.gm, name: x.name }]));
   if (bpm && isFinite(bpm)) bank.tempo = { bpm: Math.min(240, Math.max(40, Math.round(bpm))), rampBars: 0 };
   return sortKeys(bank);
 }

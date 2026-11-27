@@ -1,5 +1,5 @@
 // Tiny drum synth for auditioning a BMY-style pattern (not a kit: just enough to check timing).
-import { VEL_MIDI } from './transcribe.js?b=20261127g';
+import { VEL_MIDI } from './transcribe.js?b=20261127h';
 const SR = 44100;
 
 const voices = {};
@@ -76,7 +76,7 @@ export function renderBar(ctx, pattern, swing, bpm) {
 
 // ---- BMY's built-in kits: GeneralUser GS drum programs, rendered per BMY velocity label (kit/[program/]kit.json)
 const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
-const KIT_VERSION = 5;   // bump when kits are re-rendered, so browsers fetch the new samples
+const KIT_VERSION = 6;   // bump when kits are re-rendered, so browsers fetch the new samples
 /** The kits BMY offers (BMY_SoundFontKit.swift gsKits). Program 0 lives in kit/, the rest in kit/<program>/. */
 export const KITS = [[0, 'Standard 1'], [1, 'Standard 2'], [2, 'Standard 3'], [8, 'Room'], [16, 'Power'], [24, 'Electronic'],
   [25, '808/909'], [26, 'Dance'], [32, 'Jazz'], [40, 'Brush'], [48, 'Orchestral'], [56, 'SFX']];
@@ -114,6 +114,10 @@ export function audition(ctx, lane, vel = 'n2') {
 const KIT_LANE = { closedHat: 'closedHat', openHat: 'openHat', snare: 'snare', snareAlt: 'snareAlt', kick: 'kick', crash: 'crash',
   tomHigh: 'tomHigh', tomMid: 'tomMid', tomFloor: 'tomFloor', oneShotA: 'oneShotA', oneShotB: 'oneShotB', oneShotC: 'oneShotC', ride: 'ride' };
 
+// One-shot lanes play the percussion the transcriber heard (Standard kit samples 'gm<note>'), else the kit's own.
+let SHOT_GM = {};
+export function setOneShotSounds(map) { SHOT_GM = Object.fromEntries(Object.entries(map || {}).map(([l, x]) => [l, x.gm])); }
+
 /** Sample + choke class for one event (BMY kit if loaded, else the tiny synth). */
 function sound(e) {
   let vel = e.vel, trim = 1;
@@ -123,7 +127,8 @@ function sound(e) {
     trim = Math.min(1.5, Math.pow(v / VEL_MIDI[vel], 2));
   }
   if (KIT) {
-    const k = KIT.lanes[KIT_LANE[e.lane]] || (STD && STD.lanes[KIT_LANE[e.lane]]);
+    const gm = SHOT_GM[e.lane];
+    const k = (gm && STD && STD.lanes['gm' + gm]) || KIT.lanes[KIT_LANE[e.lane]] || (STD && STD.lanes[KIT_LANE[e.lane]]);
     if (k) { const li = VELS.indexOf(vel); return { data: k.layers[li < 0 ? 3 : li], gain: trim, excl: k.excl }; }
   }
   return { data: voice(e.voice), gain: (VEL_MIDI[vel] || 82) / 127 * trim, excl: e.voice === 'hat' || e.voice === 'ohat' ? 1 : 0 };
