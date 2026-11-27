@@ -664,9 +664,9 @@ def train(cfg: TrainConfig, device: str = 'cuda', time_limit_s: float | None = N
     ck = work / 'checkpoint.pt'
     step, best = 0, -1.0
     if ck.exists():
-        st = torch.load(ck, map_location=device)
+        st = torch.load(ck, map_location=device, weights_only=False)   # our own checkpoint
         model.load_state_dict(st['model']); opt.load_state_dict(st['opt']); sched.load_state_dict(st['sched'])
-        step, best = st['step'], st['best']
+        step, best = int(st['step']), float(st['best'])
         log(f'resumed at step {step} (best validation F1 {best:.3f})')
     rnd = np.random.default_rng(cfg.seed + step)
     lossf = torch.nn.BCEWithLogitsLoss(pos_weight=pos_w)
@@ -695,7 +695,7 @@ def train(cfg: TrainConfig, device: str = 'cuda', time_limit_s: float | None = N
             f1 = res['all']['f1']
             log('validation F1', f1, ' '.join(f"{k}:{v['f1']}" for k, v in res.items() if k != 'all'))
             if f1 > best:
-                best = f1
+                best = float(f1)
                 torch.save(model.state_dict(), work / 'best.pt')
             torch.save({'model': model.state_dict(), 'opt': opt.state_dict(), 'sched': sched.state_dict(), 'step': step, 'best': best}, ck)
         if time_limit_s and time.time() - t0 > time_limit_s:
@@ -711,7 +711,7 @@ def export(work: str, device: str = 'cpu', hidden: int = 96, name: str = 'bmy_dr
     import torch
     work = Path(work)
     model = make_model(hidden)
-    model.load_state_dict(torch.load(work / 'best.pt', map_location='cpu'))
+    model.load_state_dict(torch.load(work / 'best.pt', map_location='cpu', weights_only=False))
     model.eval()
     va = Shards(work / 'data' / 'validation')
     _, probs = evaluate(model, va, 'cpu')
