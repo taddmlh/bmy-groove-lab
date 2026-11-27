@@ -1,16 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127e';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127e';
-import { detectGrid, barTimes } from './beats.js?b=20261127e';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127e';
-import { buildBank, bankFileName } from './bank.js?b=20261127e';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127e';
-import { oafHits, loadOaf } from './oaf.js?b=20261127e';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127e';
-import { denoise } from './denoise.js?b=20261127e';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127e';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127e';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127e';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127f';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127f';
+import { detectGrid, barTimes } from './beats.js?b=20261127f';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127f';
+import { buildBank, bankFileName } from './bank.js?b=20261127f';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127f';
+import { oafHits, loadOaf } from './oaf.js?b=20261127f';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127f';
+import { denoise } from './denoise.js?b=20261127f';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127f';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127f';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127f';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1673,8 +1673,31 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27e';
+const BUILD = '2026-11-27f';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
+$('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
+$('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
+$('buildBtn').onclick = async () => {
+  if (busy) { status('Busy: try again when this job has finished.'); return; }
+  status('Checking for a new version…');
+  try { await saveNow(); } catch (e) {}
+  let latest = null;
+  try {
+    const html = await (await fetch('index.html', { cache: 'no-store' })).text();
+    latest = (html.match(/app\.js\?b=(\w+)/) || [])[1] || null;
+  } catch (e) { status('Offline: can\'t check for a new version right now.'); return; }
+  try {                                                       // drop the app shell and transcriber models (re-fetched), keep kits and the separator
+    for (const k of await caches.keys()) {
+      if (k.startsWith('gl-shell')) await caches.delete(k);
+      else if (k.startsWith('gl-libs')) { const c = await caches.open(k); for (const r of await c.keys()) if (r.url.includes('/models/')) await c.delete(r); }
+    }
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (reg) await reg.update().catch(() => {});
+  } catch (e) { log('refresh: ' + errText(e)); }
+  const cur = BUILD.replace(/-/g, '');
+  status(latest && latest !== cur ? `Updating to build ${latest}…` : `Build ${BUILD} is the latest. Reloading fresh…`);
+  setTimeout(() => location.reload(), 400);
+};
 // ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 if ('serviceWorker' in navigator && !/[?&]nosw\b/.test(location.search) && !/[?&]nodemucs\b/.test(location.search))
