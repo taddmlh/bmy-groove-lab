@@ -1,17 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128a';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128a';
-import { detectGrid, barTimes } from './beats.js?b=20261128a';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128a';
-import { buildBank, bankFileName } from './bank.js?b=20261128a';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128a';
-import { oafHits, loadOaf } from './oaf.js?b=20261128a';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128a';
-import { denoise } from './denoise.js?b=20261128a';
-import { playability } from './playable.js?b=20261128a';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128a';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128a';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128a';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128b';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128b';
+import { detectGrid, barTimes } from './beats.js?b=20261128b';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128b';
+import { buildBank, bankFileName } from './bank.js?b=20261128b';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128b';
+import { oafHits, loadOaf } from './oaf.js?b=20261128b';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128b';
+import { denoise } from './denoise.js?b=20261128b';
+import { playability } from './playable.js?b=20261128b';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128b';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128b';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128b';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -925,6 +925,12 @@ async function transcribeRegion(o, a, b) {
     const { act, frames } = await activations(o, mono, spec);
     hits = hitsFrom(act, frames, 1).map(h => ({ ...h, time: h.time + s0 / SR }));
   }
+  // level floor: a "hit" 32 dB or more below the region's peak is noise or a ringing tail, not a stroke
+  // (exams 2026-11-28: BMY rides / snares at -30...-42 dB in Tennessee Whiskey and the 75 BPM recording)
+  { const FLOOR = 10 ** (-32 / 20), before = hits.length;
+    hits = hits.filter(h => { const t = h.time - s0 / SR, i0 = Math.max(0, Math.floor((t - 0.005) * SR)), i1 = Math.min(mono.length, Math.floor((t + 0.05) * SR));
+      let m = 0; for (let i = i0; i < i1; i++) m = Math.max(m, Math.abs(mono[i])); return m >= FLOOR * 0.891; });
+    if (hits.length < before) log(`Level floor: ${before - hits.length} hit(s) more than 32 dB below the peak dropped`); }
   describeHits(hits, spec.data, spec.frames, Math.round(s0 / SR * FPS));
   if (smart) {
     const bars = S.bars.filter(x => x.end > a && x.start < b);
@@ -1712,7 +1718,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-28a';
+const BUILD = '2026-11-28b';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;

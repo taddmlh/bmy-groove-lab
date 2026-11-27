@@ -1,5 +1,5 @@
 // Tiny drum synth for auditioning a BMY-style pattern (not a kit: just enough to check timing).
-import { VEL_MIDI } from './transcribe.js?b=20261128a';
+import { VEL_MIDI } from './transcribe.js?b=20261128b';
 const SR = 44100;
 
 const voices = {};
