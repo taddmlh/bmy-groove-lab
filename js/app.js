@@ -1,16 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127c';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127c';
-import { detectGrid, barTimes } from './beats.js?b=20261127c';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127c';
-import { buildBank, bankFileName } from './bank.js?b=20261127c';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127c';
-import { oafHits, loadOaf } from './oaf.js?b=20261127c';
-import { bmytHits, loadBmyt, bmytAvailable } from './bmyt.js?b=20261127c';
-import { denoise } from './denoise.js?b=20261127c';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127c';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127c';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127c';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127d';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127d';
+import { detectGrid, barTimes } from './beats.js?b=20261127d';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127d';
+import { buildBank, bankFileName } from './bank.js?b=20261127d';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127d';
+import { oafHits, loadOaf } from './oaf.js?b=20261127d';
+import { bmytHits, loadBmyt, bmytAvailable } from './bmyt.js?b=20261127d';
+import { denoise } from './denoise.js?b=20261127d';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127d';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127d';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127d';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1574,7 +1574,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27c';
+const BUILD = '2026-11-27d';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 // ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
