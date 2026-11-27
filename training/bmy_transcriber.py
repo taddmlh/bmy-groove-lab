@@ -251,6 +251,29 @@ def drums_through_sfz(hits, seconds: float, rnd: random.Random, cfg, split: str 
     return y.astype(np.float32), played
 
 
+def kit_preview(name: str, cfg, out_wav: str | None = None):
+    """A 4-bar groove (hats, kick, snare, ghost, open hat, tom run, crash, ride, bell) through one free kit.
+    -> (pieces played, of, peak dBFS). Writes a WAV if asked (for listening)."""
+    e, hits = 0.3, []
+    for i in range(32):
+        t = 0.2 + i * e
+        hits.append((t, 46 if i in (14, 30) else 42, 60 + (i % 2) * 30))
+        if i % 8 in (0, 3, 5):
+            hits.append((t, 36, 100))
+        if i % 8 in (2, 6):
+            hits.append((t, 38, 110))
+        if i % 8 == 7:
+            hits.append((t + e / 2, 38, 35))
+    hits += [(0.2, 49, 115)] + [(0.2 + (32 + k / 2) * e, p, 100) for k, p in enumerate([48, 48, 45, 45, 43, 43])]
+    hits += [(0.2 + 36 * e, 49, 120), (0.2 + 36 * e, 36, 120), (0.2 + 38 * e, 51, 90), (0.2 + 39 * e, 53, 90)]
+    y, played = sfz_kit(name, cfg).render(hits, 0.2 + 42 * e, random.Random(0))
+    pk = float(np.abs(y).max())
+    if out_wav:
+        import soundfile as sf
+        sf.write(out_wav, (y / max(pk, 1e-9) * 0.89).astype(np.float32), SR)
+    return len(played), len(hits), 20 * math.log10(pk + 1e-12)
+
+
 # ----------------------------------------------------------------------------- generated backing parts
 # GM programs that make Demucs work hard: basses, keys, guitars, organ, strings, pads, brass, synths
 BASSES = [32, 33, 34, 35, 36, 38, 39]
@@ -483,9 +506,10 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
             hits = midi_hits(egmd.read(r['midi_filename']))
             dur = float(r['duration'])
             pick_src = rnd.random()
-            if pick_src < cfg.p_sfz_kit:
-                drums, hits = drums_through_sfz(hits, dur + 1, rnd, cfg, split)
-            elif pick_src < cfg.p_sfz_kit + cfg.p_gs_kit:
+            sfz = drums_through_sfz(hits, dur + 1, rnd, cfg, split) if pick_src < cfg.p_sfz_kit else None
+            if sfz is not None and len(sfz[1]) >= 0.8 * sum(h[1] in PITCH_CLASS for h in hits) and np.abs(sfz[0]).max() > 1e-3:
+                drums, hits = sfz                                    # (a kit that couldn't play most of it: TD-17 audio)
+            elif cfg.p_sfz_kit <= pick_src < cfg.p_sfz_kit + cfg.p_gs_kit:
                 drums = drums_through_gs(hits, rnd.choice(GS_KITS), dur + 1, cfg.sf2)
             else:
                 drums = read_wav(egmd.read(r['audio_filename']))
