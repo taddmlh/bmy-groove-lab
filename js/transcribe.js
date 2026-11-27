@@ -1,6 +1,6 @@
 // ADTOF hits + drum-stem spectrogram -> BMY-style one-bar patterns.
 // Lanes and labels follow BMY_Kit.json / BMY_Velocity.json (see claude/BMY_GrooveExtractor_BankFormat.md).
-import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127h';
+import { NBANDS, BAND_FREQ, FPS } from './dsp.js?b=20261127i';
 
 export const LANES = [   // BMY grid order, top to bottom
   { role: 'crash', name: 'Crash', color: '#d9b326' },
@@ -34,14 +34,37 @@ export const PERC = {
   handDrum: { gm: 63, name: 'Conga' }, wood: { gm: 76, name: 'Woodblock' }
 };
 const SHOTS = ['oneShotA', 'oneShotB', 'oneShotC'];
-/** -> { oneShotA: {perc, gm, name, count}, ... } for the percussion heard in these bars (busiest first). */
-export function percAllocation(hits, bars) {
+// Hand drums and woodblocks come as high/low pairs in GM. A part that clearly uses two pitches is split into two
+// units (two one-shot lanes), named by pitch: bongos above ~400 Hz, congas below.
+const PITCHED = { handDrum: bandsIn(80, 1000), wood: bandsIn(300, 3000) };
+function pairNames(perc, hiPitch) {
+  if (perc === 'wood') return { high: { gm: 76, name: 'Woodblock hi' }, low: { gm: 77, name: 'Woodblock lo' }, all: { gm: 76, name: 'Woodblock' } };
+  return hiPitch > 400
+    ? { high: { gm: 60, name: 'Bongo hi' }, low: { gm: 61, name: 'Bongo lo' }, all: { gm: 60, name: 'Bongo' } }
+    : { high: { gm: 63, name: 'Conga hi' }, low: { gm: 64, name: 'Conga lo' }, all: { gm: 63, name: 'Conga' } };
+}
+/** Units of percussion heard in these bars: [{key, perc, gm, name, count}], busiest first; sets h.percUnit. */
+function percUnits(hits, bars) {
   const inBars = h => bars.some(b => h.time >= b.start - b.step / 4 && h.time < b.end - b.step / 4);
-  const n = {};
-  for (const h of hits) if (h.cls === 'perc' && PERC[h.perc] && inBars(h)) n[h.perc] = (n[h.perc] || 0) + 1;
+  const units = {};
+  const add = (key, info, h) => { (units[key] = units[key] || { key, ...info, count: 0 }).count += inBars(h) ? 1 : 0; h.percUnit = key; };
+  for (const perc of Object.keys(PERC)) {
+    const hs = hits.filter(h => h.cls === 'perc' && h.perc === perc);
+    if (!hs.length) continue;
+    if (!PITCHED[perc] || hs.some(h => !h.pitch)) { hs.forEach(h => add(perc, { perc, ...PERC[perc] }, h)); continue; }
+    const ps = hs.map(h => h.pitch).sort((a, b) => a - b);
+    let cut = -1, r = 1.12;                                  // biggest pitch gap (> 2 semitones), 15 %+ of hits each side
+    for (let i = 1; i < ps.length; i++) if (ps[i] / ps[i - 1] > r && i >= 0.15 * ps.length && ps.length - i >= 0.15 * ps.length) { r = ps[i] / ps[i - 1]; cut = i; }
+    if (cut < 0) { const nm = pairNames(perc, ps[ps.length >> 1]).all; hs.forEach(h => add(perc, { perc, ...nm }, h)); continue; }
+    const split = (ps[cut - 1] + ps[cut]) / 2, nm = pairNames(perc, ps[Math.floor((cut + ps.length) / 2)]);
+    hs.forEach(h => { const part = h.pitch >= split ? 'high' : 'low'; add(`${perc}:${part}`, { perc, ...nm[part] }, h); });
+  }
   const order = Object.keys(PERC);
-  const ranked = Object.keys(n).sort((a, b) => n[b] - n[a] || order.indexOf(a) - order.indexOf(b)).slice(0, 3);
-  return Object.fromEntries(ranked.map((p, i) => [SHOTS[i], { perc: p, ...PERC[p], count: n[p] }]));
+  return Object.values(units).filter(u => u.count).sort((a, b) => b.count - a.count || order.indexOf(a.perc) - order.indexOf(b.perc));
+}
+/** -> { oneShotA: {perc, gm, name, count, key}, ... }: the three busiest percussion units in these bars. */
+export function percAllocation(hits, bars) {
+  return Object.fromEntries(percUnits(hits, bars).slice(0, 3).map((u, i) => [SHOTS[i], u]));
 }
 const lin = v => Math.pow(10, v) - 1;
 function energy(spec, frames, f, bands) {
@@ -75,9 +98,9 @@ export function describeHits(hits, spec, frames, specFrame0) {
       if (hits.some(x => x.cls === 'snare' && Math.abs(x.time - h.time) < 0.03)) h.decay *= 0.5;   // a snare's ring sits in the hat bands too
     }
     if (h.cls === 'cymbal') h.decay = meanEnergy(spec, frames, f + 30, f + 45, B.cymbal) / pk;
-    if (h.cls === 'tom') {
+    if (h.cls === 'tom' || (h.cls === 'perc' && PITCHED[h.perc])) {   // strongest band shortly after the hit
       let best = 0, bv = -1;
-      for (const b of B.toneRange) { const e = meanEnergy(spec, frames, f + 3, f + 10, [b]); if (e > bv) { bv = e; best = b; } }
+      for (const b of h.cls === 'tom' ? B.toneRange : PITCHED[h.perc]) { const e = meanEnergy(spec, frames, f + 3, f + 10, [b]); if (e > bv) { bv = e; best = b; } }
       h.pitch = BAND_FREQ[best];
     }
   }
@@ -109,7 +132,7 @@ function tomLanes(hits) {
 export function assignLanes(hits, bars) {
   const tm = tomLanes(hits);
   const shots = percAllocation(hits, bars), shotOf = {};
-  for (const [lane, x] of Object.entries(shots)) shotOf[x.perc] = lane;
+  for (const [lane, x] of Object.entries(shots)) shotOf[x.key] = lane;
   for (const h of hits) {
     if (h.fixedLane) continue;                // Perform: the lane was chosen (lane mode) or taught (beatbox)
     if (h.cls === 'kick') h.lane = 'kick';
@@ -117,7 +140,7 @@ export function assignLanes(hits, bars) {
     else if (h.cls === 'tom') h.lane = h.modelLane || tm.get(Math.round(h.pitch)) || 'tomMid';          // BMY's model names the tom
     else if (h.cls === 'hihat') h.lane = h.open !== undefined ? (h.open ? 'openHat' : 'closedHat') : h.decay > 0.2 ? 'openHat' : 'closedHat';
     else if (h.cls === 'cymbal') h.lane = h.kind || 'crash';      // Magenta tells ride from crash; ADTOF doesn't
-    else if (h.cls === 'perc') h.lane = shotOf[h.perc] || null;    // a 4th / 5th percussion type: no lane left
+    else if (h.cls === 'perc') h.lane = shotOf[h.percUnit] || null;   // beyond the three busiest: no lane left
   }
   // Ride: 3+ cymbal hits in a bar are a ride pattern, not crashes.
   for (const bar of bars) {

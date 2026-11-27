@@ -15,7 +15,8 @@ import soundfile as sf
 
 SR = 44100
 VELS = {'gh': 28, 'sf': 46, 'n1': 66, 'n2': 82, 'a1': 102, 'a2': 116}
-NOTES = {82: 'Shaker', 54: 'Tambourine', 56: 'Cowbell', 63: 'Conga', 76: 'Woodblock'}   # = PERC_GM in training
+NOTES = {82: 'Shaker', 54: 'Tambourine', 56: 'Cowbell', 63: 'Conga hi', 64: 'Conga lo', 60: 'Bongo hi', 61: 'Bongo lo',
+         76: 'Woodblock hi', 77: 'Woodblock lo'}   # PERC_GM in training + the high/low pairs Groove Lab splits by pitch
 GAIN = 2.3        # the CLI renders 2.3x quieter than the kit's FluidSynth (WebAssembly) render (snare n2: 0.205 vs 0.471)
 KIT = os.path.join(os.path.dirname(__file__), '..', 'kit')
 sf2 = sys.argv[1]

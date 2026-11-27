@@ -1,7 +1,7 @@
 // Gentle hiss reduction for recordings: learns the steady background noise from the quietest moments
 // (10th-percentile power per frequency), then turns down only that part of the sound (spectral gating),
 // limited to `reduceDb` so music and drum transients are left alone.
-import { fft, NFFT } from './dsp.js?b=20261127h';
+import { fft, NFFT } from './dsp.js?b=20261127i';
 
 const N = NFFT, H = N / 4, K = N / 2 + 1;
 const W = new Float64Array(N); for (let n = 0; n < N; n++) W[n] = Math.sin(Math.PI * n / N);   // sqrt-Hann: analysis x synthesis = Hann

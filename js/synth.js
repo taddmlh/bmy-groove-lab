@@ -1,5 +1,5 @@
 // Tiny drum synth for auditioning a BMY-style pattern (not a kit: just enough to check timing).
-import { VEL_MIDI } from './transcribe.js?b=20261127h';
+import { VEL_MIDI } from './transcribe.js?b=20261127i';
 const SR = 44100;
 
 const voices = {};
@@ -76,7 +76,7 @@ export function renderBar(ctx, pattern, swing, bpm) {
 
 // ---- BMY's built-in kits: GeneralUser GS drum programs, rendered per BMY velocity label (kit/[program/]kit.json)
 const VELS = ['gh', 'sf', 'n1', 'n2', 'a1', 'a2'];
-const KIT_VERSION = 6;   // bump when kits are re-rendered, so browsers fetch the new samples
+const KIT_VERSION = 7;   // bump when kits are re-rendered, so browsers fetch the new samples
 /** The kits BMY offers (BMY_SoundFontKit.swift gsKits). Program 0 lives in kit/, the rest in kit/<program>/. */
 export const KITS = [[0, 'Standard 1'], [1, 'Standard 2'], [2, 'Standard 3'], [8, 'Room'], [16, 'Power'], [24, 'Electronic'],
   [25, '808/909'], [26, 'Dance'], [32, 'Jazz'], [40, 'Brush'], [48, 'Orchestral'], [56, 'SFX']];

@@ -2,7 +2,7 @@
 // Songs, stems and Perform takes are in IndexedDB; the drum-separator parts in the app's own model cache.
 // The page is fetched fresh when online (so updates arrive); every versioned file (?b= build, ?v= kit) is
 // kept once fetched. Bump Q with each build (same string as the ?b= on the module imports).
-const Q = '?b=20261127h';
+const Q = '?b=20261127i';
 const SHELL = 'gl-shell' + Q, LIBS = 'gl-libs-v1', KITS = 'gl-kits-v5';
 const MODULES = ['app', 'adtof', 'bank', 'beats', 'db', 'demucs', 'bmyt', 'denoise', 'dsp', 'oaf', 'perform', 'synth', 'transcribe'];
 const PRECACHE = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png', 'js/rec-worklet.js',
