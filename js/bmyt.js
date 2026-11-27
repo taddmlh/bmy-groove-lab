@@ -2,7 +2,7 @@
 // models/bmy_drums.onnx + models/bmy_drums.json. Front end = training/bmy_transcriber.features():
 // -1 dBFS peak, periodic Hann, 2048-point FFT, hop 441 (100 fps), centred + reflect padding, power,
 // 128 HTK mel bands 30 Hz - 16 kHz (Slaney norm), ln(power + 1e-7).
-import { fft } from './dsp.js?b=20261127b';
+import { fft } from './dsp.js?b=20261127c';
 
 const SR = 44100, N = 2048, HOP = 441, NM = 128, K = N / 2 + 1, FMIN = 30, FMAX = 16000;
 export const BMYT_FPS = SR / HOP;
@@ -50,14 +50,15 @@ export function bmytFeatures(x) {
 }
 
 let sess = null, meta = null;
-export async function loadBmyt(ort, url = 'models/bmy_drums.onnx') {
+export const BMYT_V = 'trial1';        // bump when a retrained model replaces models/bmy_drums.* (the worker caches models)
+export async function loadBmyt(ort, url = `models/bmy_drums.onnx?v=${BMYT_V}`) {
   if (!sess) {
-    meta = await (await fetch(typeof url === 'string' ? url.replace(/\.onnx$/, '.json') : 'models/bmy_drums.json')).json();
+    meta = await (await fetch(typeof url === 'string' ? url.replace(/\.onnx(\?|$)/, '.json$1') : `models/bmy_drums.json?v=${BMYT_V}`)).json();
     sess = await ort.InferenceSession.create(url, { executionProviders: ['wasm'] });
   }
   return { sess, meta };
 }
-export const bmytAvailable = async () => { try { const r = await fetch('models/bmy_drums.json', { method: 'HEAD' }); return r.ok; } catch (e) { return false; } };
+export const bmytAvailable = async () => { try { const r = await fetch(`models/bmy_drums.json?v=${BMYT_V}`, { method: 'HEAD', cache: 'no-store' }); return r.ok; } catch (e) { return false; } };
 
 /** Hits for x (mono, 44.1 kHz, -1 dBFS), times from 0: { time, cls, modelLane?, kind?, open?, p }. */
 export async function bmytHits(ort, x) {

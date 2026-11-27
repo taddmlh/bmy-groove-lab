@@ -1,0 +1,20 @@
+{
+ "version": "trial1",
+ "classes": ["kick", "snare", "tomHigh", "tomMid", "tomFloor", "hhClosed", "hhOpen", "crash", "ride"],
+ "thresholds": [0.5, 0.4, 0.75, 0.7, 0.75, 0.55, 0.65, 0.6, 0.6],
+ "sr": 44100, "hop": 441, "fps": 100.0, "nfft": 2048, "n_mels": 128, "fmin": 30.0, "fmax": 16000.0,
+ "mel": "htk, slaney norm", "log": "ln(power + 1e-7)", "input_peak_dbfs": -1,
+ "window": "periodic hann, centred, reflect padding", "min_gap_frames": 3,
+ "test": {
+  "kick": {"precision": 0.932, "recall": 0.869, "f1": 0.9, "n": 6886},
+  "snare": {"precision": 0.872, "recall": 0.728, "f1": 0.793, "n": 11669},
+  "tomHigh": {"precision": 0.737, "recall": 0.664, "f1": 0.699, "n": 682},
+  "tomMid": {"precision": 0.696, "recall": 0.397, "f1": 0.506, "n": 433},
+  "tomFloor": {"precision": 0.801, "recall": 0.691, "f1": 0.742, "n": 910},
+  "hhClosed": {"precision": 0.845, "recall": 0.823, "f1": 0.834, "n": 9085},
+  "hhOpen": {"precision": 0.705, "recall": 0.711, "f1": 0.708, "n": 765},
+  "crash": {"precision": 0.894, "recall": 0.716, "f1": 0.795, "n": 176},
+  "ride": {"precision": 0.936, "recall": 0.94, "f1": 0.938, "n": 3203},
+  "all": {"precision": 0.874, "recall": 0.795, "f1": 0.833}
+ }
+}
