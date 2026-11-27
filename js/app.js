@@ -1,16 +1,16 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127d';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127d';
-import { detectGrid, barTimes } from './beats.js?b=20261127d';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127d';
-import { buildBank, bankFileName } from './bank.js?b=20261127d';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127d';
-import { oafHits, loadOaf } from './oaf.js?b=20261127d';
-import { bmytHits, loadBmyt, bmytAvailable } from './bmyt.js?b=20261127d';
-import { denoise } from './denoise.js?b=20261127d';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127d';
-import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127d';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127d';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261127e';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261127e';
+import { detectGrid, barTimes } from './beats.js?b=20261127e';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern } from './transcribe.js?b=20261127e';
+import { buildBank, bankFileName } from './bank.js?b=20261127e';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261127e';
+import { oafHits, loadOaf } from './oaf.js?b=20261127e';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261127e';
+import { denoise } from './denoise.js?b=20261127e';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261127e';
+import { renderRegion, loadKit, audition, KITS } from './synth.js?b=20261127e';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261127e';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -899,7 +899,7 @@ function doubleStrokes(bars) {
 async function transcribeRegion(o, a, b) {
   crumb('transcribing');
   const model = transcriber();
-  if (model === 'oaf') await loadOaf(o, 'models/oaf_drums.onnx'); else if (model === 'bmy') await loadBmyt(o, 'models/bmy_drums.onnx'); else await loadAdtof(o, 'models/adtof.onnx');
+  if (model === 'oaf') await loadOaf(o, 'models/oaf_drums.onnx'); else if (model === 'bmy') await loadBmyt(o); else await loadAdtof(o, 'models/adtof.onnx');   // loadBmyt(o): versioned URL, so a new model isn't served from cache
   const s0 = Math.floor(a * SR), s1 = Math.min(S.drumMono.length, Math.floor(b * SR));
   // normalise the stem to -1 dBFS peak (max +30 dB) for detection only; playback and velocities are unaffected
   const raw = S.drumMono.subarray(s0, s1);
@@ -1251,6 +1251,105 @@ $('saveStem').onclick = async () => {
   if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: fname }); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const url = URL.createObjectURL(file), el = document.createElement('a'); el.href = url; el.download = fname; document.body.appendChild(el); el.click(); el.remove();
 };
+// ---------------------------------------------------------------- Exam: ADTOF vs BMY on this song's drum stem
+// ADTOF is the reference here only (personal testing): where both agree, take it as right; where they
+// disagree, Matt listens. Exports a readable report, the raw hits (JSON) and the stem (mono WAV).
+const EX_TOL = 0.05, EX5 = ['kick', 'snare', 'tom', 'hihat', 'cymbal'];
+function exMatch(a, b) {                              // one-to-one within 50 ms -> [pairs, onlyA, onlyB]
+  const used = new Set(), pairs = [], onlyA = [];
+  for (const x of a) {
+    let best = -1, bd = EX_TOL + 1;
+    b.forEach((y, j) => { const d = Math.abs(y.time - x.time); if (!used.has(j) && d <= EX_TOL && d < bd) { best = j; bd = d; } });
+    if (best < 0) onlyA.push(x); else { used.add(best); pairs.push([x, b[best]]); }
+  }
+  return [pairs, onlyA, b.filter((_, j) => !used.has(j))];
+}
+function exWhere(t) {                                 // "bar 12, beat 2&" from the song's grid
+  const i = barAt(t);
+  if (i < 0) return { bar: null, label: `${t.toFixed(2)} s` };
+  const b = S.bars[i], pos = (t - b.start) / b.step, q = Math.round(pos), beat = Math.floor(q / 4) + 1, sub = ((q % 4) + 4) % 4;
+  const off = Math.abs(pos - q) > 0.3 ? '~' : '';
+  return { bar: barNo(i), label: `bar ${String(barNo(i)).padStart(3)}  beat ${beat}${['', 'e', '&', 'a'][sub] || ''}${off}` };
+}
+function exLevel(mono, t) {                           // loudness around the hit, dB below the stem's peak
+  const i0 = Math.max(0, Math.floor((t - 0.005) * SR)), i1 = Math.min(mono.length, Math.floor((t + 0.05) * SR));
+  let m = 0; for (let i = i0; i < i1; i++) m = Math.max(m, Math.abs(mono[i]));
+  return m;
+}
+async function runExam() {
+  if (!S.drumMono || !S.extracted.length) { status('No drums yet: extract some bars first.'); return; }
+  if (!(await bmytAvailable())) { status('The BMY transcriber model is not on the server.'); return; }
+  busy = true; updateButtons();
+  try {
+    const o = await getOrt();
+    await loadAdtof(o, 'models/adtof.onnx'); await loadBmyt(o);
+    const regions = S.extracted.map(r => [...r]).sort((x, y) => x[0] - y[0]);
+    const A = [], B = [];
+    let peakAll = 0;
+    for (const [k, [a, b]] of regions.entries()) {
+      status(`Exam: transcribing region ${k + 1} of ${regions.length} with ADTOF and BMY…`, k / regions.length);
+      const s0 = Math.floor(a * SR), s1 = Math.min(S.drumMono.length, Math.floor(b * SR)), raw = S.drumMono.subarray(s0, s1);
+      let peak = 0; for (let i = 0; i < raw.length; i++) peak = Math.max(peak, Math.abs(raw[i]));
+      peakAll = Math.max(peakAll, peak);
+      const gain = peak > 0 ? Math.min(31.6, 0.891 / peak) : 1, mono = gain === 1 ? raw : raw.map(v => v * gain);
+      const { act, frames } = await activations(o, mono, logSpec(mono));
+      hitsFrom(act, frames).forEach(h => A.push({ time: +(h.time + a).toFixed(3), cls: h.cls, s: +h.strength.toFixed(3) }));
+      (await bmytHits(o, mono)).forEach(h => B.push({ time: +(h.time + a).toFixed(3), cls: h.cls, model: h.model, p: +h.p.toFixed(3) }));
+      await new Promise(r => setTimeout(r));
+    }
+    const db = t => { const m = exLevel(S.drumMono, t); return m > 0 && peakAll > 0 ? 20 * Math.log10(m / peakAll) : -99; };
+    const rows = [], sum = {};
+    for (const c of EX5) {
+      const [pairs, aOnly, bOnly] = exMatch(A.filter(h => h.cls === c), B.filter(h => h.cls === c));
+      sum[c] = { agree: pairs.length, adtofOnly: aOnly.length, bmyOnly: bOnly.length };
+      aOnly.forEach(h => rows.push({ t: h.time, drum: c, who: 'ADTOF only', other: B.filter(x => Math.abs(x.time - h.time) <= EX_TOL).map(x => x.model) }));
+      bOnly.forEach(h => rows.push({ t: h.time, drum: c, who: 'BMY only', bmy: h.model, other: A.filter(x => Math.abs(x.time - h.time) <= EX_TOL).map(x => x.cls) }));
+    }
+    rows.sort((x, y) => x.t - y.t);
+    // BMY's finer classes on the agreed hits (ADTOF can't check these: for the record)
+    const fine = B.reduce((m, h) => ((m[h.model] = (m[h.model] || 0) + 1), m), {});
+    const pct = x => (x.agree + x.adtofOnly + x.bmyOnly ? Math.round(100 * x.agree / (x.agree + x.adtofOnly + x.bmyOnly)) : 100);
+    const tot = EX5.reduce((t, c) => ({ agree: t.agree + sum[c].agree, adtofOnly: t.adtofOnly + sum[c].adtofOnly, bmyOnly: t.bmyOnly + sum[c].bmyOnly }), { agree: 0, adtofOnly: 0, bmyOnly: 0 });
+    const L = [];
+    L.push(`BMY GROOVE LAB EXAM: ADTOF vs BMY`, `Song: ${S.name}`, `Groove Lab ${BUILD}; BMY model ${BMYT_V}; ${S.grid.bpm.toFixed(2)} BPM; stem ${regions.map(([a, b]) => `${a.toFixed(1)}–${b.toFixed(1)} s`).join(', ')}`,
+      `Match = same drum within ${EX_TOL * 1000} ms. Drums compared as ADTOF's 5 (toms, hats, cymbals each one).`, '',
+      `Agreement overall: ${pct(tot)}%  (both ${tot.agree}, ADTOF only ${tot.adtofOnly}, BMY only ${tot.bmyOnly})`, '',
+      `drum      both   ADTOF only   BMY only   agree`);
+    for (const c of EX5) L.push(`${c.padEnd(8)}${String(sum[c].agree).padStart(6)}${String(sum[c].adtofOnly).padStart(13)}${String(sum[c].bmyOnly).padStart(11)}${String(pct(sum[c])).padStart(7)}%`);
+    L.push('', `BMY's own detail: ${Object.entries(fine).map(([k, v]) => `${k} ${v}`).join(', ')}`, '',
+      `LISTEN LIST (${rows.length}): each disagreement, with what the other one heard there and how loud the stem is.`,
+      `Mark each line A (ADTOF right), B (BMY right) or X (both wrong) if you like, and upload this file with the .json and .wav.`, '');
+    let lastBar = null;
+    for (const r of rows) {
+      const w = exWhere(r.t);
+      if (w.bar !== lastBar && lastBar !== null) L.push('');
+      lastBar = w.bar;
+      const other = r.other.length ? `(other heard: ${[...new Set(r.other)].join('+')})` : '(other heard nothing)';
+      L.push(`${w.label}  ${r.t.toFixed(3).padStart(8)} s  ${r.drum.padEnd(7)} ${r.who.padEnd(10)}${r.bmy ? ` [${r.bmy}]` : ''}  ${db(r.t).toFixed(0).padStart(4)} dB  ${other}   ?`);
+    }
+    const base = `${S.name} exam ${new Date().toISOString().slice(0, 10)}`;
+    const json = { song: S.name, build: BUILD, bmyModel: BMYT_V, bpm: S.grid.bpm, bars: S.bars.map(b => +b.start.toFixed(4)), barSec: barSec(),
+      firstBar: S.bars.findIndex(b => b.start >= -0.1), regions, tol: EX_TOL, adtof: A, bmy: B, summary: sum, stem: `${base}.wav`, stemStart: regions[0][0] };
+    const a0 = regions[0][0], a1 = regions[regions.length - 1][1], s0 = Math.floor(a0 * SR), s1 = Math.min(S.drumMono.length, Math.floor(a1 * SR));
+    const buf = audioCtx().createBuffer(1, s1 - s0, SR); buf.getChannelData(0).set(S.drumMono.subarray(s0, s1));
+    const files = [new File([L.join('\n')], `${base}.txt`, { type: 'text/plain' }), new File([JSON.stringify(json)], `${base}.json`, { type: 'application/json' }),
+      new File([wavBytes(buf)], `${base}.wav`, { type: 'audio/wav' })];
+    log(L.slice(0, 13).join('\n'));
+    examFiles = { files, base };
+    $('examBtn').textContent = 'Save exam (3 files)';
+    status(`Exam done: ${pct(tot)}% agreement, ${rows.length} spots to listen to. Tap "Save exam" to share the report, hits and stem.`, 1);
+  } catch (err) { status('Exam failed: ' + (err.message || err)); log('ERROR exam ' + errText(err)); }
+  finally { busy = false; updateButtons(); }
+}
+let examFiles = null;
+async function saveExam() {                         // a fresh tap: Safari only shares straight after a user gesture
+  const { files, base } = examFiles;
+  examFiles = null; $('examBtn').textContent = 'Exam';
+  if (navigator.canShare && navigator.canShare({ files })) { try { await navigator.share({ files, title: base }); return; } catch (e) { if (e.name === 'AbortError') return; log('share failed: ' + errText(e)); } }
+  for (const f of files) { const url = URL.createObjectURL(f), el = document.createElement('a'); el.href = url; el.download = f.name; document.body.appendChild(el); el.click(); el.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000); }
+  status(`Saved ${base} (.txt, .json, .wav) to Downloads.`);
+}
+$('examBtn').onclick = () => (examFiles ? saveExam() : runExam());
 $('closeLog').onclick = () => { $('logBox').open = false; };
 $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($('log').textContent); $('copyLog').textContent = 'Copied'; } catch (e) { $('copyLog').textContent = 'Copy failed'; } };
 
@@ -1574,7 +1673,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-27d';
+const BUILD = '2026-11-27e';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 // ---------------------------------------------------------------- installable app (Home Screen / Chrome install)
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
