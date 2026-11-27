@@ -73,7 +73,7 @@ def build(args):
         hits = [h for h in fn() if h[1] in bt.PITCH_CLASS]
         for k in kits:
             y, played = render(hits, kits, k, None)
-            conds = ('dry', 'mixed') + (('shaker',) if args.sf2 else ())
+            conds = ('dry', 'mixed', 'buzz') + (('shaker',) if args.sf2 else ())
             for cond in conds:
                 rs = random.Random(zlib.crc32(f'{sname}{k}'.encode()))
                 truth_hits = played
@@ -84,6 +84,8 @@ def build(args):
                     truth_hits = sorted(played + [h for h in aux_hits if h[0] < len(y) / bt.SR - 1])
                     z = y + aux / (np.sqrt(np.mean(aux ** 2)) + 1e-9) * np.sqrt(np.mean(y ** 2)) * 10 ** (-8 / 20)
                     z = bt.augment(bt.normalise(z, -6), rs)
+                elif cond == 'buzz':                      # snare wires rattling under every kick: right answer = kick only
+                    z = bt.augment(bt.normalise(bt.kick_buzz(y, played, rs, (-20.0, -14.0)), -6), rs)
                 else:
                     z = y if cond == 'dry' else bt.augment(bt.normalise(y, -6), rs)
                 base = out / 'audio' / f'{sname}__{k}__{cond}'
@@ -176,11 +178,11 @@ def report(S, truth, path):
     L = []
     w = L.append
     kits = sorted({Path(k).stem.split('__')[1] for k in truth})
-    conds = [c for c in ('dry', 'mixed', 'shaker') if any(Path(k).stem.endswith('__' + c) for k in truth)]
+    conds = [c for c in ('dry', 'mixed', 'buzz', 'shaker') if any(Path(k).stem.endswith('__' + c) for k in truth)]
     scen = list(SCENARIOS)
     w('BMY TRANSCRIBER TEST RIG')
     w(f'{len(truth)} files: {len(scen)} grooves x {len(kits)} kits ({", ".join(kits)}) x conditions. '
-      f'Conditions: {", ".join(conds)} (shaker = a shaker part added; right answer: BMY shaker, nothing for ADTOF). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
+      f'Conditions: {", ".join(conds)} (buzz = snare wires rattling under each kick, not a snare hit; shaker = a shaker part added; right answer: BMY shaker, nothing for ADTOF). Hit = within {int(TOL * 1000)} ms. ADTOF has 5 classes (toms, hats, cymbals each one class).')
     w('naked = held out of BMY training (never heard). Others: different performances, but kits BMY trained on.\n')
     for label, s in S.items():
         cnt, classes = s['cnt'], s['classes']

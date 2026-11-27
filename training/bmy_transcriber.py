@@ -361,7 +361,35 @@ def render_backing(seconds: float, bpm: float, seed: int, sf2: str) -> np.ndarra
         os.unlink(path)
 
 
-# ----------------------------------------------------------------------------- auxiliary percussion (unlabelled)
+# ----------------------------------------------------------------------------- snare-wire buzz on kicks (unlabelled)
+# A kick sets the snare wires rattling (and the shell ringing) with no stick on the snare. Real stems have it, the
+# training kits mostly don't, and kits1 read it as snare on every kick (EWTRTW, 2026-11-27). Added, never labelled.
+def kick_buzz(drums: np.ndarray, hits, rnd: random.Random, level_db=(-30.0, -14.0)) -> np.ndarray:
+    kicks = [(t, v) for t, p, v in hits if PITCH_CLASS.get(p) == 'kick']
+    if not kicks:
+        return drums
+    rng = np.random.default_rng(rnd.randrange(1 << 30))
+    n = int(rnd.uniform(0.12, 0.35) * SR)
+    t = np.arange(n) / SR
+    wires = rng.standard_normal(n).astype(np.float32)
+    wires = _shelf(_shelf(wires, rnd.uniform(1200, 2500), -24, high=False), rnd.uniform(7000, 11000), -12, high=True)
+    env = (1 - np.exp(-t / 0.003)) * np.exp(-t / rnd.uniform(0.04, 0.14))
+    shell = np.sin(2 * np.pi * rnd.uniform(170, 260) * t) * np.exp(-t / rnd.uniform(0.05, 0.12)) * rnd.uniform(0.0, 0.6)
+    burst = (wires / (np.abs(wires).max() + 1e-9) * env + shell).astype(np.float32)
+    burst /= np.abs(burst).max() + 1e-9
+    peak = float(np.abs(drums).max()) + 1e-9
+    lvl = 10 ** (rnd.uniform(*level_db) / 20)
+    out = drums.copy()
+    for tk, v in kicks:
+        i = int((tk + rnd.uniform(0.002, 0.012)) * SR)
+        if i >= len(out):
+            continue
+        seg = burst[:len(out) - i] * peak * lvl * (v / 127) ** 1.5 * rnd.uniform(0.8, 1.2)
+        out[i:i + len(seg)] += seg
+    return out
+
+
+# ----------------------------------------------------------------------------- auxiliary percussion
 # Shakers, tambourines, congas... land in the Demucs drum stem. Without them in training the model read a shaker
 # (a cabasa, in EWTRTW) as snare. Matt's call: they carry the groove, so they are labelled as their own classes
 # (PERC) and Groove Lab puts them on BMY's one-shot lanes with a GM tag.
@@ -523,6 +551,7 @@ class PrepConfig:
     val_hours: float = 2.0
     test_hours: float = 2.0
     p_gs_kit: float = 0.10              # re-render the performance through a GeneralUser GS kit
+    p_buzz: float = 0.35                # snare-wire buzz on every kick (never labelled as snare)
     p_aux: float = 0.35                 # add auxiliary percussion parts (labelled as the PERC classes)
     p_sfz_kit: float = 0.45             # ... or through a free multi-sampled acoustic kit (sfz_kits.KITS); the rest: E-GMD's TD-17 audio
     sfz_kits: tuple = ()                # which free kits ('' = all in sfz_kits.KITS)
@@ -590,6 +619,8 @@ def prepare(split: str, cfg: PrepConfig, egmd: EGMD, device: str = 'cuda', limit
                 drums = drums_through_gs(hits, rnd.choice(GS_KITS), dur + 1, cfg.sf2)
             else:
                 drums = read_wav(egmd.read(r['audio_filename']))
+            if rnd.random() < cfg.p_buzz:                            # snare wires rattling under the kick (unlabelled)
+                drums = kick_buzz(drums, hits, rnd)
             if rnd.random() < cfg.p_aux:                             # shaker, tambourine, bells, hand drums, woodblocks (labelled)
                 bpm_a = float(r['bpm']) if r.get('bpm') else rnd.uniform(70, 160)
                 t0 = min((h[0] for h in hits), default=0.0)
