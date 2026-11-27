@@ -712,18 +712,21 @@ def export(work: str, device: str = 'cpu', hidden: int = 96, name: str = 'bmy_dr
     work = Path(work)
     model = make_model(hidden)
     model.load_state_dict(torch.load(work / 'best.pt', map_location='cpu', weights_only=False))
-    model.eval()
+    model.eval().to(device)
+    log('scoring validation set to tune thresholds')
     va = Shards(work / 'data' / 'validation')
-    _, probs = evaluate(model, va, 'cpu')
+    _, probs = evaluate(model, va, device)
+    log('tuning thresholds')
     thr = tune_thresholds(probs)
     meta = {'classes': CLASSES, 'thresholds': thr, 'sr': SR, 'hop': HOP, 'fps': FPS, 'nfft': NFFT, 'n_mels': NMELS,
             'fmin': FMIN, 'fmax': FMAX, 'mel': 'htk, slaney norm', 'log': 'ln(power + 1e-7)', 'input_peak_dbfs': -1,
             'window': 'periodic hann, centred, reflect padding', 'min_gap_frames': 3}
     tst = work / 'data' / 'test'
     if tst.exists() and any(tst.glob('shard_*.npz')):
-        meta['test'], _ = evaluate(model, Shards(tst), 'cpu', thr)
+        log('scoring test set')
+        meta['test'], _ = evaluate(model, Shards(tst), device, thr)
         log('test scores', json.dumps(meta['test']))
-    model.eval()
+    model.eval().to('cpu')
     torch.onnx.export(model, (torch.zeros(1, 300, NMELS),), str(work / f'{name}.onnx'), input_names=['mel'], output_names=['onset'],
                       dynamic_axes={'mel': {1: 'T'}, 'onset': {1: 'T'}}, opset_version=17, dynamo=False)
     json.dump(meta, open(work / f'{name}.json', 'w'), indent=1)
