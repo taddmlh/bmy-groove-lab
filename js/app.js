@@ -1,17 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128e';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128e';
-import { detectGrid, barTimes } from './beats.js?b=20261128e';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128e';
-import { buildBank, bankFileName } from './bank.js?b=20261128e';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128e';
-import { oafHits, loadOaf } from './oaf.js?b=20261128e';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128e';
-import { denoise } from './denoise.js?b=20261128e';
-import { playability } from './playable.js?b=20261128e';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128e';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128e';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128e';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128f';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128f';
+import { detectGrid, barTimes } from './beats.js?b=20261128f';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128f';
+import { buildBank, bankFileName } from './bank.js?b=20261128f';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128f';
+import { oafHits, loadOaf } from './oaf.js?b=20261128f';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128f';
+import { denoise } from './denoise.js?b=20261128f';
+import { playability } from './playable.js?b=20261128f';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128f';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128f';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128f';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1195,8 +1195,19 @@ function drawGridHead(t) {
 function stopPlay() {
   drawGridHead(null);
   killNodes(); playing = false; cancelAnimationFrame(raf); $('play').textContent = '▶︎ Play'; $('gridPlay').textContent = '▶︎'; $('gridPlay').classList.remove('on');
+  showPerfPlay();
 }
-function startPlay(from) {
+function showPerfPlay() { const b = $('pPlay'); if (!b) return; try { P; } catch (e) { return; } b.textContent = playing ? '■ Stop' : '▶︎ Play'; b.classList.toggle('on', playing); b.disabled = !!P.rec || !(P.takes.length || P.base); }
+/** Perform: loop the selected pattern, starting on the click's next bar line so it stays in time with the click. */
+function playPattern() {
+  if (!S.mixBuf || !S.marks.length) return;
+  const i = S.marks[Math.min(P.cur, S.marks.length - 1)], b = S.bars[i]; if (!b) return;
+  S.sel = { a: b.start, b: b.end }; S.tab = i; S.loop = true; $('loop').classList.add('on');
+  let at; const C = P.clock, now = audioCtx().currentTime;
+  if (C && Math.abs(C.bpm - P.bpm) < 1e-6) at = C.t0 + Math.ceil((now + 0.08 - C.t0) / C.bar) * C.bar;
+  renderTabs(); renderGrid(); startPlay(b.start, at); showPerfPlay();
+}
+function startPlay(from, at) {
   if (!S.mixBuf) return;
   const ctx = audioCtx();
   killNodes();
@@ -1204,7 +1215,7 @@ function startPlay(from) {
   if (!S.sel) b = Math.min(S.dur, a + 120);
   if (b - a < 0.05) return;
   let pos = from !== undefined && from >= a && from < b ? from : a;
-  const t0 = ctx.currentTime + 0.04;
+  const t0 = at && at > ctx.currentTime + 0.02 ? at : ctx.currentTime + 0.04;   // `at`: start on a given audio-clock time (Perform: the click's next bar line)
   const make = (c, buf, ls, le, offset) => {
     if (!gains[c]) { gains[c] = ctx.createGain(); gains[c].connect(ctx.destination); }
     gains[c].gain.setValueAtTime(gainOf(c), ctx.currentTime);
@@ -1219,7 +1230,7 @@ function startPlay(from) {
   if (items.length) { patA = a; make('pattern', renderRegion(ctx, a, b, items, S.swing), 0, b - a, pos - a); }
   nodes.mix.onended = () => { if (playing && !S.loop) stopPlay(); };
   posNow = pos; lastCtxT = t0; loopA = a; loopB = b;
-  playing = true; $('play').textContent = '■ Stop'; $('gridPlay').textContent = '■'; $('gridPlay').classList.add('on');
+  playing = true; $('play').textContent = '■ Stop'; $('gridPlay').textContent = '■'; $('gridPlay').classList.add('on'); showPerfPlay();
   if (!S.drumBuf && S.mixer.drums.on) status('Drums are silent until you extract them.');
   cancelAnimationFrame(raf);
   const tick = () => {
@@ -1426,7 +1437,7 @@ function showPerf() {
     } else { P.cur = +b.dataset.p; pStatus(`Pattern ${P.cur + 1} selected: new takes layer onto it.`); }
     showPerf(); if (P.takes.length) buildPerformSong();
   });
-  $('pListen').disabled = !!P.rec;
+  $('pListen').disabled = !!P.rec; showPerfPlay();
   const hasPat = P.takes.some(t => (t.pat || 0) === P.cur) || (P.base && P.bars > 1);
   $('pDelPat').disabled = !!P.rec || !(hasPat || P.bars > 1);
   if ($('pDelPat').dataset.arm !== String(P.cur)) { $('pDelPat').textContent = 'Delete pattern'; delete $('pDelPat').dataset.arm; }
@@ -1682,7 +1693,9 @@ async function stopTake() {
   pStatus(`Pattern ${P.cur + 1}, layer ${P.takes.filter(t => t.pat === P.cur).length}: ${hits.length} hits from ${passes} pass${passes > 1 ? 'es' : ''} you played in${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
   log(`Perform layer ${P.takes.length}: ${hits.length} hits, lanes ${lanes.join('/')}`);
   await buildPerformSong();
+  playPattern();                                                            // hear it straight away, looping in time with the click
 }
+$('pPlay').onclick = () => { if (P.rec) return; if (playing) stopPlay(); else playPattern(); };
 $('pUndo').onclick = async () => {
   if (P.rec) return;
   const li = P.takes.map(t => t.pat).lastIndexOf(P.cur); if (li < 0) { pStatus(`Pattern ${P.cur + 1} has no layers.`); return; }
@@ -1767,7 +1780,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-28e';
+const BUILD = '2026-11-28f';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
