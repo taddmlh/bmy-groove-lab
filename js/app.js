@@ -1,17 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128c';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128c';
-import { detectGrid, barTimes } from './beats.js?b=20261128c';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128c';
-import { buildBank, bankFileName } from './bank.js?b=20261128c';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128c';
-import { oafHits, loadOaf } from './oaf.js?b=20261128c';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128c';
-import { denoise } from './denoise.js?b=20261128c';
-import { playability } from './playable.js?b=20261128c';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128c';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128c';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128c';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128d';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128d';
+import { detectGrid, barTimes } from './beats.js?b=20261128d';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128d';
+import { buildBank, bankFileName } from './bank.js?b=20261128d';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128d';
+import { oafHits, loadOaf } from './oaf.js?b=20261128d';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128d';
+import { denoise } from './denoise.js?b=20261128d';
+import { playability } from './playable.js?b=20261128d';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128d';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128d';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128d';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -514,7 +514,8 @@ async function restoreState(st) {
   S.perf = st.perf || null;
   if (S.perf) {   // keep the recorded loop as a base layer so new overdubs add to it
     const sr = S.mixBuf.sampleRate, a0 = Math.round(0.5 * sr), n = Math.round(240 / S.perf.bpm * S.perf.bars * sr);
-    Object.assign(P, { bpm: S.perf.bpm, bars: S.perf.bars, takes: S.perf.takes.map(t => ({ ...t, audio: null })), key: S.key, name: S.name, base: S.mixMono.slice(a0, a0 + n) });
+    Object.assign(P, { bpm: S.perf.bpm, baseBpm: S.perf.bpm, bars: S.perf.bars, cur: Math.min(S.perf.cur ?? 0, S.perf.bars - 1), key: S.key, name: S.name, base: S.mixMono.slice(a0, a0 + n),
+      takes: S.perf.takes.map(t => ({ pat: 0, bpm: S.perf.bpm, ...t, audio: null })) });
   } else if (P.key && P.key !== S.key) Object.assign(P, { takes: [], key: null, base: null });
   S.hits = st.hits || []; S.flux = (st.flux || []).map(r => ({ ...r, data: Float32Array.from(r.data) })); S.patterns = new Map((st.patterns || []).filter(([i]) => i < S.bars.length));
   S.tab = S.patterns.has(st.tab) || S.marks.includes(st.tab) ? st.tab : (S.marks[0] ?? null);
@@ -1400,13 +1401,13 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 
 // ---------------------------------------------------------------- Perform: clap / tap / beatbox over a click
 const P = {
-  bpm: 100, bars: 2, mode: 'lane', lane: 'snare', overdub: true, clickVol: 0.7,
+  bpm: 100, bars: 1, cur: 0, mode: 'lane', lane: 'snare', overdub: true, clickVol: 0.7,
   latency: null, sounds: null, takes: [], key: null, name: null, rec: null, taps: [], stream: null, base: null, clock: null, follow: null, chain: null, gainDb: 0
 };
-try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { gainDb: st.gainDb || 0, latency: st.latency ?? null, bpm: st.bpm || 100, bars: st.bars || 2, clickVol: st.clickVol ?? 0.7 });
+try { const st = JSON.parse(localStorage.getItem('bmyGLPerform') || '{}'); Object.assign(P, { gainDb: st.gainDb || 0, latency: st.latency ?? null, bpm: st.bpm || 100, clickVol: st.clickVol ?? 0.7 });
   if (st.sounds) P.sounds = st.sounds.map(x => ({ ...x, centroid: x.centroid && Float32Array.from(x.centroid) })); } catch (e) {}
 if (!P.sounds) P.sounds = [{ name: 'Kick', lane: 'kick' }, { name: 'Snare', lane: 'snare' }, { name: 'Hat', lane: 'closedHat' }];
-const savePerfPrefs = () => { try { localStorage.setItem('bmyGLPerform', JSON.stringify({ gainDb: P.gainDb || 0, latency: P.latency, bpm: P.bpm, bars: P.bars, clickVol: P.clickVol,
+const savePerfPrefs = () => { try { localStorage.setItem('bmyGLPerform', JSON.stringify({ gainDb: P.gainDb || 0, latency: P.latency, bpm: P.bpm, clickVol: P.clickVol,
   sounds: P.sounds.map(x => ({ name: x.name, lane: x.lane, centroid: x.centroid ? Array.from(x.centroid) : null, n: x.n || 0 })) })); } catch (e) {} };
 const pStatus = m => { $('pStatus').textContent = m; };
 const defaultLatency = () => { const c = audioCtx(); return (c.outputLatency || 0) + (c.baseLatency || 0) + 0.015; };
@@ -1415,7 +1416,17 @@ const latency = () => (P.latency ?? defaultLatency());
 function showPerf() {
   $('pGain').value = P.gainDb || 0; $('pGainV').textContent = gainLabel(P.gainDb || 0);
   $('pBpm').value = P.bpm; $('pClick').value = Math.round(P.clickVol * 100);
-  document.querySelectorAll('#pBars button').forEach(b => b.classList.toggle('on', +b.dataset.n === P.bars));
+  $('pPats').innerHTML = [...Array(P.bars).keys()].map(i => `<button data-p="${i}" class="${i === P.cur ? 'on' : ''}">${i + 1}</button>`).join('')
+    + (P.bars < 6 ? '<button data-p="new" title="Start the next pattern (one bar)">+</button>' : '');
+  $('pPats').querySelectorAll('button').forEach(b => b.onclick = () => {
+    if (P.rec) return;
+    if (b.dataset.p === 'new') {
+      if (!P.takes.some(t => t.pat === P.bars - 1)) { P.cur = P.bars - 1; pStatus(`Record something into pattern ${P.bars} first.`); return showPerf(); }
+      P.bars++; P.cur = P.bars - 1; pStatus(`Pattern ${P.cur + 1}: tap Record take and play it (one bar, repeating).`);
+    } else { P.cur = +b.dataset.p; pStatus(`Pattern ${P.cur + 1} selected: new takes layer onto it.`); }
+    showPerf(); if (P.takes.length) buildPerformSong();
+  });
+  $('pListen').disabled = !!P.rec;
   document.querySelectorAll('#pMode button').forEach(b => b.classList.toggle('on', b.dataset.m === P.mode));
   $('pLane').classList.toggle('hidden', P.mode !== 'lane'); $('pTeachBox').classList.toggle('hidden', P.mode !== 'beatbox');
   if (!$('pLane').options.length) $('pLane').innerHTML = LANES.map(l => `<option value="${l.role}">${l.name}</option>`).join('');
@@ -1435,7 +1446,6 @@ $('perfBtn').onclick = () => {
   try { navigator.permissions.query({ name: 'microphone' }).then(p => { if (p.state === 'granted' && !$('perf').classList.contains('hidden')) micChain().catch(() => {}); }, () => {}); } catch (e) {}
 };
 $('pBpm').onchange = () => { P.bpm = Math.max(40, Math.min(240, +$('pBpm').value || 100)); savePerfPrefs(); if (P.clock && !P.rec) { stopClock(); startClock(); } };
-document.querySelectorAll('#pBars button').forEach(b => b.onclick = () => { if (P.takes.length && +b.dataset.n !== P.bars) { pStatus('Clear the takes first to change the number of bars.'); return; } P.bars = +b.dataset.n; savePerfPrefs(); showPerf(); });
 document.querySelectorAll('#pMode button').forEach(b => b.onclick = () => { P.mode = b.dataset.m; showPerf(); });
 $('pLane').onchange = () => { P.lane = $('pLane').value; };
 $('pClick').oninput = () => { P.clickVol = +$('pClick').value / 100; savePerfPrefs(); if (P.clock) P.clock.gain.gain.value = P.clickVol; };
@@ -1559,6 +1569,7 @@ function followTick(F) {
   pStatus(`${ended ? 'Set' : 'Following you'}: ${bpm} BPM · click on your beats, "1" on your first clap${ended ? '. Clap again any time to change it.' : '…'}`);
 }
 $('pListen').onclick = async () => {
+  if (P.rec) { pStatus('Stop the take first: Listen and Record don\'t run together.'); return; }
   if (P.follow) { stopFollow(`Stopped listening. Click stays at ${P.bpm} BPM.`); return; }
   try { await startFollow(); } catch (err) { pStatus('Microphone not available: ' + err.message); }
 };
@@ -1611,7 +1622,8 @@ $('pClickBtn').onclick = () => { if (P.rec) return; if (P.clock) { stopFollow();
 $('pRec').onclick = async () => {
   if (P.rec) return stopTake();
   if (P.mode === 'beatbox' && !P.sounds.some(x => x.centroid)) { pStatus('Teach at least one sound first (Teach buttons).'); return; }
-  if (P.key && S.key !== P.key) Object.assign(P, { takes: [], key: null, base: null });   // a normal song is open: start a new Perform song
+  if (P.key && S.key !== P.key) Object.assign(P, { takes: [], key: null, base: null, bars: 1, cur: 0 });   // a normal song is open: start a new Perform song
+  if (P.follow) stopFollow();                                            // Listen and Record never run together
   try {
     const ctx = audioCtx(); stopPlay();
     const r = await micOpen();
@@ -1622,7 +1634,7 @@ $('pRec').onclick = async () => {
     else { const k = Math.ceil((recStart + 0.25 - C.t0) / C.bar); bar1 = C.t0 + k * C.bar; }   // next bar line (at least 0.25 s away)
     P.rec = { r, recStart, bar1, C, timer: setInterval(() => {
       const t = ctx.currentTime;
-      const msg = t < bar1 ? `Get ready… ${Math.min(4, Math.ceil((bar1 - t) / C.beat))}` : `Recording · pass ${Math.floor((t - bar1) / (C.bar * P.bars)) + 1} · bar ${Math.floor(((t - bar1) % (C.bar * P.bars)) / C.bar) + 1} of ${P.bars}`;
+      const msg = t < bar1 ? `Get ready… ${Math.min(4, Math.ceil((bar1 - t) / C.beat))}` : `Recording pattern ${P.cur + 1} · pass ${Math.floor((t - bar1) / C.bar) + 1} · beat ${Math.floor(((t - bar1) % C.bar) / C.beat) + 1}. Play when ready; empty passes are skipped.`;
       pStatus(msg);
     }, 100) };
     $('pRec').classList.add('on'); $('pRec').textContent = '■ Stop'; showPerf();
@@ -1640,7 +1652,7 @@ async function stopTake() {
   for (const ct of C.sched.filter(t => t >= R.recStart && t < R.bar1 - 0.05)) { const o = on.find(x => x.T - ct > -0.01 && x.T - ct < 0.3 && looksLikeClick(x.feat)); if (o) offs.push(o.T - ct); }   // clicks before the take starts; only the click itself, not claps
   offs.sort((a, b) => a - b);
   if (offs.length >= 3 && offs[offs.length - 1] - offs[0] < 0.02) { P.latency = offs[Math.floor(offs.length / 2)]; savePerfPrefs(); log(`Perform latency measured from the click: ${(P.latency * 1000).toFixed(0)} ms`); }
-  const lat = latency(), step = R.beat / 4, loopSteps = 16 * P.bars, loopSec = R.bar * P.bars;
+  const lat = latency(), step = R.beat / 4, loopSteps = 16, loopSec = R.bar;      // one bar at a time
   const clickTimes = C.sched.filter(t => t >= R.recStart - 0.1).map(t => t + lat);
   const hits = [];
   let clicksIgnored = 0, unsure = 0;
@@ -1648,30 +1660,35 @@ async function stopTake() {
     const T = o.T - lat;
     if (T < R.bar1 - step / 4) continue;                                            // count-in
     if (clickTimes.some(c => Math.abs(o.T - c) < 0.03) && looksLikeClick(o.feat)) { clicksIgnored++; continue; }
-    let pos = (T - R.bar1) / step; pos = ((pos + 0.25) % loopSteps + loopSteps) % loopSteps - 0.25;   // fold passes into the loop
+    const pass = Math.floor((T - R.bar1 + step / 4) / loopSec);
+    let pos = (T - R.bar1) / step; pos = ((pos + 0.25) % loopSteps + loopSteps) % loopSteps - 0.25;   // fold passes into the bar
     let lane = P.lane;
     if (P.mode === 'beatbox') { const c = classify(o.feat, P.sounds); if (c.i < 0) continue; if (c.score < 0.5) unsure++; lane = P.sounds[c.i].lane; }
-    hits.push({ pos, lane, levelDb: o.levelDb });
+    hits.push({ pos, lane, levelDb: o.levelDb, pass });
   }
+  const played = [...new Set(hits.map(h => h.pass))];                       // only passes where you played anything
   // the take's audio, latency-corrected and folded into the loop (passes summed)
   const loopN = Math.round(loopSec * sr), audio = new Float32Array(loopN);
   const start = Math.round((R.bar1 + lat) * sr) - frame0;
-  for (let i = Math.max(0, start); i < mono.length; i++) audio[(i - start) % loopN] += mono[i];
+  for (let i = Math.max(0, start); i < mono.length; i++) if (played.includes(Math.floor((i - start) / loopN))) audio[(i - start) % loopN] += mono[i];
+  hits.forEach(h => { h.pos += 16 * P.cur; delete h.pass; });                // into the current pattern
   const lanes = P.mode === 'lane' ? [P.lane] : [...new Set(P.sounds.filter(x => x.centroid).map(x => x.lane))];
-  P.takes.push({ id: Date.now(), hits, audio, lanes, bpm: P.bpm });
-  const passes = Math.max(1, Math.round((mono.length - start) / loopN));
-  pStatus(`Layer ${P.takes.length}: ${hits.length} hits over ${passes} pass${passes > 1 ? 'es' : ''}${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
+  if (!hits.length) { pStatus('Nothing heard in that take: nothing added.'); showPerf(); return; }
+  P.takes.push({ id: Date.now(), hits, audio, lanes, bpm: P.bpm, pat: P.cur });
+  const passes = played.length;
+  pStatus(`Pattern ${P.cur + 1}, layer ${P.takes.filter(t => t.pat === P.cur).length}: ${hits.length} hits from ${passes} pass${passes > 1 ? 'es' : ''} you played in${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
   log(`Perform layer ${P.takes.length}: ${hits.length} hits, lanes ${lanes.join('/')}`);
   await buildPerformSong();
 }
 $('pUndo').onclick = async () => {
   if (P.rec) return;
-  P.takes.pop();
+  const li = P.takes.map(t => t.pat).lastIndexOf(P.cur); if (li < 0) { pStatus(`Pattern ${P.cur + 1} has no layers.`); return; }
+  P.takes.splice(li, 1);
   if (!P.takes.length && !P.base) stopClock();      // nothing left: stop the click too
   await buildPerformSong();
   pStatus(P.takes.length ? `Removed the last layer; ${P.takes.length} left. The click keeps going: tap Record to redo it.` : 'All layers removed; click stopped.');
 };
-$('pClear').onclick = async () => { if (P.rec) return; stopClock(); P.takes = []; P.key = null; P.base = null; pStatus('Cleared; click stopped. Record a new take to start a new Perform song.'); showPerf(); };
+$('pClear').onclick = async () => { if (P.rec) return; stopClock(); P.takes = []; P.key = null; P.base = null; P.baseBpm = null; P.bars = 1; P.cur = 0; pStatus('Cleared; click stopped. Record a new take to start a new Perform song.'); showPerf(); };
 
 /** Turn the takes into a song: bar lines known, all bars marked, hits in fixed lanes; then the usual grid / mixer / export. */
 async function buildPerformSong() {
@@ -1679,10 +1696,10 @@ async function buildPerformSong() {
   const loopN = Math.round(bar * P.bars * sr), total = Math.round(lead * sr) + loopN + Math.round(0.5 * sr);
   const buf = ctx.createBuffer(2, total, sr), L = buf.getChannelData(0), R = buf.getChannelData(1);
   // a layer recorded at another tempo (Listen / tempo changed between layers): stretch its audio to this loop
-  const fit = a => { if (!a || a.length === loopN) return a; const out = new Float32Array(loopN), r = a.length / loopN;
-    for (let i = 0; i < loopN; i++) { const x = i * r, j = Math.floor(x), f = x - j; out[i] = (a[j] || 0) * (1 - f) + (a[j + 1] || 0) * f; } return out; };
-  const layers = [P.base, ...P.takes.map(t => t.audio)].filter(Boolean).map(fit);
-  for (const a of layers) for (let i = 0; i < loopN && i < a.length; i++) { const j = Math.round(lead * sr) + i; L[j] += a[i]; R[j] += a[i]; }
+  const fit = (a, from) => { const n = Math.round(a.length * from / P.bpm); if (n === a.length) return a; const out = new Float32Array(n), r = a.length / n;
+    for (let i = 0; i < n; i++) { const x = i * r, j = Math.floor(x), f = x - j; out[i] = (a[j] || 0) * (1 - f) + (a[j + 1] || 0) * f; } return out; };
+  const layers = [P.base && { a: fit(P.base, P.baseBpm || P.bpm), at: 0 }, ...P.takes.filter(t => t.audio).map(t => ({ a: fit(t.audio, t.bpm || P.bpm), at: (t.pat || 0) * bar }))].filter(Boolean);
+  for (const { a, at } of layers) { const o = Math.round((lead + at) * sr); for (let i = 0; i < a.length && o + i < loopN + Math.round(lead * sr); i++) { L[o + i] += a[i]; R[o + i] += a[i]; } }
   let pk = 0; for (let i = 0; i < total; i++) pk = Math.max(pk, Math.abs(L[i]));
   if (pk > 0.98) for (let i = 0; i < total; i++) { L[i] *= 0.98 / pk; R[i] *= 0.98 / pk; }
   if (!P.key) { const d = new Date(); P.key = 'perf-' + d.getTime(); P.name = `Perform ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; }
@@ -1694,10 +1711,10 @@ async function buildPerformSong() {
   S.marks = [...Array(Math.min(6, P.bars)).keys()].map(k => first + k);
   S.hits = P.takes.flatMap(t => t.hits).map(h => ({ time: lead + h.pos * step, cls: 'perform', lane: h.lane, fixedLane: true, levelDb: h.levelDb, strength: 1 })).sort((a, b) => a.time - b.time);
   S.patterns = new Map(); buildPatterns(true);
-  S.tab = S.marks[0] ?? null; S.sel = S.marks.length ? { a: S.bars[S.marks[0]].start, b: S.bars[S.marks[S.marks.length - 1]].end } : null;
+  S.tab = S.marks[P.cur] ?? S.marks[0] ?? null; S.sel = S.marks.length ? { a: S.bars[S.marks[0]].start, b: S.bars[S.marks[S.marks.length - 1]].end } : null;
   S.view.pps = Math.max(8, waveW() / (bar * P.bars + 1)); S.view.start = 0;
   $('songTitle').textContent = S.name; $('bankName').value = S.name; setBpmField();
-  S.perf = { bpm: P.bpm, bars: P.bars, takes: P.takes.map(t => ({ id: t.id, lanes: t.lanes, hits: t.hits })) };
+  S.perf = { bpm: P.bpm, bars: P.bars, cur: P.cur, takes: P.takes.map(t => ({ id: t.id, lanes: t.lanes, hits: t.hits, pat: t.pat || 0, bpm: t.bpm || P.bpm })) };
   updateButtons(); showLock(); renderTabs(); renderGrid(); redraw(); showPerf();
   try { await putFile({ key: S.key, bytes: wavBytes(buf), type: 'audio/wav' }); } catch (e) {}
   try { await putStems({ key: S.key, regions: [], perfTakes: P.takes.filter(t => t.audio).map(t => ({ id: t.id, audio: t.audio })), perfBase: P.base || null }); } catch (e) {}
@@ -1726,7 +1743,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-28c';
+const BUILD = '2026-11-28d';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;
