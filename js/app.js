@@ -1,17 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128b';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128b';
-import { detectGrid, barTimes } from './beats.js?b=20261128b';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128b';
-import { buildBank, bankFileName } from './bank.js?b=20261128b';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128b';
-import { oafHits, loadOaf } from './oaf.js?b=20261128b';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128b';
-import { denoise } from './denoise.js?b=20261128b';
-import { playability } from './playable.js?b=20261128b';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128b';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128b';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128b';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128c';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128c';
+import { detectGrid, barTimes } from './beats.js?b=20261128c';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128c';
+import { buildBank, bankFileName } from './bank.js?b=20261128c';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128c';
+import { oafHits, loadOaf } from './oaf.js?b=20261128c';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128c';
+import { denoise } from './denoise.js?b=20261128c';
+import { playability } from './playable.js?b=20261128c';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128c';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128c';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128c';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1496,26 +1496,29 @@ async function listenFor(secs, label) {
   while ((performance.now() - t0) / 1000 < secs) { pStatus(`${label} ${Math.ceil(secs - (performance.now() - t0) / 1000)}…`); await sleep(200); }
   return micClose(r);
 }
-// Listen = follow: keeps listening, finds the tempo and where the beats fall, starts the click on your beat and keeps it in step.
-// Holds still while a take records (the take needs a fixed grid).
-const F_WIN = 8, F_EVERY = 400;
-function followTempo(ts, guess) {
-  // circular fit on the 8th-note grid; ±8 % around the guess (or the plain median-interval tempo when there is none)
-  let best = null;
-  const lo = guess ? guess * 0.92 : 60, hi = guess ? guess * 1.08 : 180;
-  for (let bpm = lo; bpm <= hi; bpm += 0.1) {
-    const p = 30 / bpm; let re = 0, im = 0;
-    for (const t of ts) { const a = 2 * Math.PI * t / p; re += Math.cos(a); im += Math.sin(a); }
-    const R = Math.hypot(re, im) / ts.length;
-    if (!best || R > best.R) best = { bpm, R };
-  }
-  return best;
+// Listen: set or change the tempo by ear. Clap, click or hit something ON THE BEAT (Matt, 2026-11-28: users only
+// play beats here). Every clap is a beat: a straight line through the claps (beat number -> time) gives the tempo
+// and where the beats fall; your first clap is "1", so the click's accent lands on it. Each burst of claps sets the
+// click once it's steady (4+ claps); then it holds. Clap again any time (between layers too) to change it.
+// Paused while a take records; the take's own hits never move it.
+const F_WIN = 8, F_EVERY = 300, F_GAP = 2.0;
+function fitBeats(ts) {
+  // ts: clap times of one burst. Beat numbers from the median gap (a missed clap = a 2-beat gap), then least squares.
+  const iv = []; for (let i = 1; i < ts.length; i++) iv.push(ts[i] - ts[i - 1]);
+  const m = [...iv].sort((x, y) => x - y)[iv.length >> 1];
+  if (!(m > 0.25 && m < 1.5)) return null;                                   // 40...240 BPM
+  const k = [0]; for (let i = 1; i < ts.length; i++) k.push(k[i - 1] + Math.max(1, Math.round(iv[i - 1] / m)));
+  const n = ts.length, mk = k.reduce((a, b) => a + b) / n, mt = ts.reduce((a, b) => a + b) / n;
+  let sxy = 0, sxx = 0; for (let i = 0; i < n; i++) { sxy += (k[i] - mk) * (ts[i] - mt); sxx += (k[i] - mk) ** 2; }
+  const beat = sxy / sxx, t0 = mt - beat * mk;
+  const rms = Math.sqrt(ts.reduce((a, t, i) => a + (t - (t0 + beat * k[i])) ** 2, 0) / n);
+  return { beat, t0, rms, n, last: k[n - 1] };
 }
 function startFollow() {
   return micOpen().then(r => {
-    const F = { r, dropped: 0, timer: null, locked: false, lastN: 0 };
+    const F = { r, dropped: 0, timer: null, ignoreBefore: audioCtx().currentTime, applied: 0 };
     F.timer = setInterval(() => followTick(F), F_EVERY);
-    P.follow = F; showListen(); pStatus('Listening… clap, tap or play; the click will join you.');
+    P.follow = F; showListen(); pStatus('Listening: clap (or tap, click, hit something) on the beat, 4 or more times. Your first clap is "1".');
   });
 }
 function stopFollow(msg) {
@@ -1526,39 +1529,34 @@ function stopFollow(msg) {
 function showListen() { const on = !!P.follow; $('pListen').classList.toggle('live', on); $('pListen').setAttribute('aria-pressed', String(on)); $('pListen').textContent = on ? '● Listening' : 'Listen'; }
 function followTick(F) {
   const r = F.r, ctx = audioCtx(), sr = ctx.sampleRate;
-  // keep the last F_WIN seconds
   while (r.chunks.length > 1 && r.frames - F.dropped - r.chunks[0].length > F_WIN * sr) { F.dropped += r.chunks[0].length; r.chunks.shift(); }
-  if (P.rec || r.frame0 === null) return;
-  const n = r.frames - F.dropped; if (n < sr * 1.5) return;
+  if (P.rec) { F.ignoreBefore = ctx.currentTime + 0.5; return; }            // a take's hits never set the tempo
+  if (r.frame0 === null) return;
+  const n = r.frames - F.dropped; if (n < sr * 1.2) return;
   const mono = new Float32Array(n); let o = 0; for (const c of r.chunks) { mono.set(c, o); o += c.length; }
-  const lat = latency(), base = (r.frame0 + F.dropped) / sr;
-  const on = detectOnsets(mono).filter(x => !looksLikeClick(x.feat)).map(x => base + x.t - lat);   // when you actually played (audio clock)
-  const now = ctx.currentTime, recent = on.filter(t => now - t < F_WIN);
-  if (recent.length < 4) { if (F.locked && recent.length === 0) pStatus(`Listening… (${P.bpm} BPM)`); return; }
-  if (now - recent[recent.length - 1] > 2.5) return;                                    // gone quiet: leave the click alone
-  let guess = F.locked ? P.bpm : tempoFromOnsets(recent);
-  if (!guess) return;
-  const fit = followTempo(recent, guess);
-  if (!fit || fit.R < 0.55) { pStatus(`Listening… not steady yet (${recent.length} hits)`); return; }
-  const bpm = Math.round((F.locked ? P.bpm + 0.5 * (fit.bpm - P.bpm) : fit.bpm) * 10) / 10;
-  const beat = 60 / bpm;
-  // which of your hits sit on beats: phase of the quarter grid from hits near it
-  let re = 0, im = 0; for (const t of recent) { const a = 2 * Math.PI * t / beat; re += Math.cos(a); im += Math.sin(a); }
-  const ph = ((Math.atan2(im, re) / (2 * Math.PI)) * beat + beat) % beat;             // your beats fall at ph + k*beat
+  const lat = latency(), base = (r.frame0 + F.dropped) / sr, now = ctx.currentTime;
+  const on = detectOnsets(mono).filter(x => !looksLikeClick(x.feat)).map(x => base + x.t - lat).filter(t => t > F.ignoreBefore);
+  if (!on.length) return;
+  // the current burst: claps since the last gap of F_GAP seconds
+  let i0 = on.length - 1; while (i0 > 0 && on[i0] - on[i0 - 1] < F_GAP) i0--;
+  const burst = on.slice(i0);
+  const ended = now - burst[burst.length - 1] > F_GAP;
+  if (burst.length < 4) { if (!ended) pStatus(`Listening… ${burst.length} clap${burst.length > 1 ? 's' : ''}, keep going`); return; }
+  if (burst.length === F.applied && burst[0] === F.burst0) return;           // nothing new in this burst
+  const fit = fitBeats(burst);
+  if (!fit) return;
+  if (fit.rms > 0.035) { pStatus(`Listening… not steady yet (${Math.round(fit.rms * 1000)} ms apart). Keep it even.`); return; }
+  const bpm = Math.round(60 / fit.beat * 2) / 2;                              // nearest half BPM
+  const beat = 60 / bpm, one = fit.t0;                                       // your first clap = beat 1
+  F.applied = burst.length; F.burst0 = burst[0];
   P.bpm = bpm; $('pBpm').value = bpm; savePerfPrefs();
   let C = P.clock;
-  if (!C) {
-    let t = ph + Math.ceil((now + 0.25 - ph) / beat) * beat;                             // your next beat
-    C = startClock(t); F.locked = true;
-    pStatus(`Locked on: ${bpm} BPM. The click is with you. Tap Record take when ready.`); return;
+  if (!C) C = startClock(one);                                               // starts on your next beat, "1" where you began
+  else {                                                                     // move the running click onto your beats
+    const k = Math.ceil((now + 0.06 - one) / beat);                            // beats since your "1"
+    Object.assign(C, { beat, bar: 4 * beat, bpm, t0: one, next: k });
   }
-  // nudge the running click: tempo, then phase (half the error each time)
-  const nextT = C.t0 + C.next * C.beat;
-  let err = ((ph - nextT) % beat + beat) % beat; if (err > beat / 2) err -= beat;
-  const corr = Math.abs(err) > 0.008 ? 0.5 * err : 0;
-  C.beat = beat; C.bar = 4 * beat; C.bpm = bpm; C.t0 = nextT + corr - C.next * beat;
-  F.locked = true;
-  pStatus(`Following: ${bpm} BPM${Math.abs(err) > 0.015 ? ` · nudging ${Math.round(err * 1000)} ms` : ' · in step'}`);
+  pStatus(`${ended ? 'Set' : 'Following you'}: ${bpm} BPM · click on your beats, "1" on your first clap${ended ? '. Clap again any time to change it.' : '…'}`);
 }
 $('pListen').onclick = async () => {
   if (P.follow) { stopFollow(`Stopped listening. Click stays at ${P.bpm} BPM.`); return; }
@@ -1587,16 +1585,23 @@ function startClock(at) {
   const ctx = audioCtx(), clicks = clickBuffers(ctx), beat = 60 / P.bpm;
   const gain = ctx.createGain(); gain.gain.value = P.clickVol; gain.connect(ctx.destination);
   const C = { t0: at ?? ctx.currentTime + 0.4, beat, bar: 4 * beat, gain, next: 0, sched: [], bpm: P.bpm };
+  C.next = Math.max(0, Math.ceil((ctx.currentTime + 0.05 - C.t0) / beat));   // a start in the past: carry on from the next beat
   const schedule = () => {
     while (C.t0 + C.next * C.beat < ctx.currentTime + 0.12) {
       const tt = C.t0 + C.next * C.beat;
       const n = ctx.createBufferSource(); n.buffer = C.next % 4 === 0 ? clicks.accent : clicks.beat; n.connect(gain); n.start(Math.max(ctx.currentTime, tt));
+      const bi = C.next % 4; setTimeout(() => beatLight(bi), Math.max(0, (tt - ctx.currentTime) * 1000));
       C.sched.push(tt); if (C.sched.length > 4000) C.sched.splice(0, 2000); C.next++;
     }
   };
   schedule(); C.timer = setInterval(schedule, 25);
   P.clock = C; showClock();
   return C;
+}
+function beatLight(i) {
+  const el = $('pBeat'); if (!el) return;
+  [...el.children].forEach((d, j) => d.classList.toggle('on', j === i));
+  clearTimeout(beatLight.t); beatLight.t = setTimeout(() => [...el.children].forEach(d => d.classList.remove('on')), 120);
 }
 function stopClock() { if (!P.clock) return; clearInterval(P.clock.timer); try { P.clock.gain.disconnect(); } catch (e) {} P.clock = null; showClock(); }
 function showClock() { const on = !!P.clock; $('pClickBtn').classList.toggle('on', on); $('pClickBtn').textContent = on ? '■ Click' : '▶︎ Click'; }
@@ -1653,7 +1658,7 @@ async function stopTake() {
   const start = Math.round((R.bar1 + lat) * sr) - frame0;
   for (let i = Math.max(0, start); i < mono.length; i++) audio[(i - start) % loopN] += mono[i];
   const lanes = P.mode === 'lane' ? [P.lane] : [...new Set(P.sounds.filter(x => x.centroid).map(x => x.lane))];
-  P.takes.push({ id: Date.now(), hits, audio, lanes });
+  P.takes.push({ id: Date.now(), hits, audio, lanes, bpm: P.bpm });
   const passes = Math.max(1, Math.round((mono.length - start) / loopN));
   pStatus(`Layer ${P.takes.length}: ${hits.length} hits over ${passes} pass${passes > 1 ? 'es' : ''}${clicksIgnored ? `, ${clicksIgnored} click(s) ignored` : ''}${unsure ? `, ${unsure} unsure` : ''}. Latency ${Math.round(lat * 1000)} ms.`);
   log(`Perform layer ${P.takes.length}: ${hits.length} hits, lanes ${lanes.join('/')}`);
@@ -1673,7 +1678,10 @@ async function buildPerformSong() {
   const ctx = audioCtx(), sr = ctx.sampleRate, lead = 0.5, bar = 240 / P.bpm, step = bar / 16;
   const loopN = Math.round(bar * P.bars * sr), total = Math.round(lead * sr) + loopN + Math.round(0.5 * sr);
   const buf = ctx.createBuffer(2, total, sr), L = buf.getChannelData(0), R = buf.getChannelData(1);
-  const layers = [P.base, ...P.takes.map(t => t.audio)].filter(Boolean);
+  // a layer recorded at another tempo (Listen / tempo changed between layers): stretch its audio to this loop
+  const fit = a => { if (!a || a.length === loopN) return a; const out = new Float32Array(loopN), r = a.length / loopN;
+    for (let i = 0; i < loopN; i++) { const x = i * r, j = Math.floor(x), f = x - j; out[i] = (a[j] || 0) * (1 - f) + (a[j + 1] || 0) * f; } return out; };
+  const layers = [P.base, ...P.takes.map(t => t.audio)].filter(Boolean).map(fit);
   for (const a of layers) for (let i = 0; i < loopN && i < a.length; i++) { const j = Math.round(lead * sr) + i; L[j] += a[i]; R[j] += a[i]; }
   let pk = 0; for (let i = 0; i < total; i++) pk = Math.max(pk, Math.abs(L[i]));
   if (pk > 0.98) for (let i = 0; i < total; i++) { L[i] *= 0.98 / pk; R[i] *= 0.98 / pk; }
@@ -1718,7 +1726,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-28b';
+const BUILD = '2026-11-28c';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;

@@ -24,6 +24,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 #app{display:flex;flex-direction:column;height:100%;}
 .shotTag{position:absolute;left:0;right:0;bottom:-1px;font-size:8px;line-height:1;color:#7fd18f;text-align:center;pointer-events:none;white-space:nowrap;overflow:hidden}
+.beatLight{display:inline-flex;gap:4px;margin-left:6px;align-items:center}.beatLight i{width:9px;height:9px;border-radius:50%;background:#333}.beatLight i.on{background:var(--acc)}.beatLight i:first-child.on{background:#ff5a5a}
 .buildBtn{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;padding-left:8px;padding-right:8px}
 .top{flex:0 0 auto;display:flex;flex-direction:column;gap:6px;padding:8px 10px 6px;border-bottom:1px solid var(--line)}
 .bottom{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;padding:6px 10px 8px;gap:6px}
@@ -227,7 +228,7 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <h3>Perform: clap, tap or beatbox over a click</h3>
     <div class="bar">
       <span class="grp"><span class="label">Tempo</span><input id="pBpm" type="number" min="40" max="240" step="0.1" value="100"></span>
-      <span class="grp"><button id="pTap">Tap</button><button id="pListen" aria-pressed="false" title="Keep listening: the click finds your tempo and follows you">Listen</button></span>
+      <span class="grp"><button id="pTap">Tap</button><button id="pListen" aria-pressed="false" title="Clap (or tap, click, hit something) on the beat 4+ times: sets the tempo, and the click starts with your first clap as 1">Listen</button><span id="pBeat" class="beatLight" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span>
       <span class="grp"><span class="label">Bars</span><span class="seg" id="pBars"><button data-n="1">1</button><button data-n="2" class="on">2</button><button data-n="4">4</button></span></span>
       <span class="grp"><button id="pClickBtn" title="Start or stop the click">▶︎ Click</button><input id="pClick" type="range" min="0" max="100" value="70" style="width:90px;accent-color:var(--acc)" aria-label="Click volume"></span>
     </div>
@@ -352,6 +353,6 @@ details pre{white-space:pre-wrap;overflow:auto;margin:0 0 8px;flex:1 1 auto;font
     <button data-tab="perform" aria-selected="false"><b>●</b>Perform</button>
   </nav>
 </div>
-<script type="module" src="js/app.js?b=20261128b"></script>
+<script type="module" src="js/app.js?b=20261128c"></script>
 </body>
 </html>
