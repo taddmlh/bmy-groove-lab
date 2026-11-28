@@ -1,17 +1,17 @@
 // BMY Groove Lab: song -> drum stem (Demucs) -> hits (ADTOF) -> BMY patterns -> .bmybank
-import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128d';
-import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128d';
-import { detectGrid, barTimes } from './beats.js?b=20261128d';
-import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128d';
-import { buildBank, bankFileName } from './bank.js?b=20261128d';
-import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128d';
-import { oafHits, loadOaf } from './oaf.js?b=20261128d';
-import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128d';
-import { denoise } from './denoise.js?b=20261128d';
-import { playability } from './playable.js?b=20261128d';
-import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128d';
-import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128d';
-import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128d';
+import { logSpec, toMono, FPS, NBANDS, BAND_FREQ } from './dsp.js?b=20261128e';
+import { loadAdtof, activations, hitsFrom, CLASSES } from './adtof.js?b=20261128e';
+import { detectGrid, barTimes } from './beats.js?b=20261128e';
+import { LANES, VEL, describeHits, assignLanes, detectSwing, barToPattern, percAllocation } from './transcribe.js?b=20261128e';
+import { buildBank, bankFileName } from './bank.js?b=20261128e';
+import { detectOnsets, centroid, classify, tempoFromOnsets, clickBuffers, looksLikeClick } from './perform.js?b=20261128e';
+import { oafHits, loadOaf } from './oaf.js?b=20261128e';
+import { bmytHits, loadBmyt, bmytAvailable, BMYT_V } from './bmyt.js?b=20261128e';
+import { denoise } from './denoise.js?b=20261128e';
+import { playability } from './playable.js?b=20261128e';
+import { loadDemucs, separateDrums, SEPARATOR_VERSION } from './demucs.js?b=20261128e';
+import { renderRegion, loadKit, audition, KITS, setOneShotSounds } from './synth.js?b=20261128e';
+import { putSong, getSong, putFile, getFile, hasFile, putStems, getStems, listSongs, deleteSong, askPersist } from './db.js?b=20261128e';
 
 const ORT_VER = '1.31.1';
 const SR = 44100;
@@ -1427,6 +1427,9 @@ function showPerf() {
     showPerf(); if (P.takes.length) buildPerformSong();
   });
   $('pListen').disabled = !!P.rec;
+  const hasPat = P.takes.some(t => (t.pat || 0) === P.cur) || (P.base && P.bars > 1);
+  $('pDelPat').disabled = !!P.rec || !(hasPat || P.bars > 1);
+  if ($('pDelPat').dataset.arm !== String(P.cur)) { $('pDelPat').textContent = 'Delete pattern'; delete $('pDelPat').dataset.arm; }
   document.querySelectorAll('#pMode button').forEach(b => b.classList.toggle('on', b.dataset.m === P.mode));
   $('pLane').classList.toggle('hidden', P.mode !== 'lane'); $('pTeachBox').classList.toggle('hidden', P.mode !== 'beatbox');
   if (!$('pLane').options.length) $('pLane').innerHTML = LANES.map(l => `<option value="${l.role}">${l.name}</option>`).join('');
@@ -1688,6 +1691,27 @@ $('pUndo').onclick = async () => {
   await buildPerformSong();
   pStatus(P.takes.length ? `Removed the last layer; ${P.takes.length} left. The click keeps going: tap Record to redo it.` : 'All layers removed; click stopped.');
 };
+// Delete the selected pattern (two taps): its layers go, later patterns move up one.
+$('pDelPat').onclick = async () => {
+  if (P.rec) return;
+  const btn = $('pDelPat'), k = P.cur;
+  if (btn.dataset.arm !== String(k)) { btn.dataset.arm = String(k); btn.textContent = `Delete pattern ${k + 1}?`; pStatus(`Tap again to delete pattern ${k + 1} and all its layers.`); return; }
+  delete btn.dataset.arm; btn.textContent = 'Delete pattern';
+  P.takes = P.takes.filter(t => (t.pat || 0) !== k);
+  for (const t of P.takes) if ((t.pat || 0) > k) { t.pat--; t.hits.forEach(h => { h.pos -= 16; }); }
+  if (P.base) {                                                             // a reopened song's recording: cut that bar out
+    const sr = audioCtx().sampleRate, n = Math.round(240 / (P.baseBpm || P.bpm) * sr);
+    const a = P.base, cut = new Float32Array(Math.max(0, a.length - Math.min(n, Math.max(0, a.length - k * n))));
+    cut.set(a.subarray(0, Math.min(a.length, k * n))); if ((k + 1) * n < a.length) cut.set(a.subarray((k + 1) * n), k * n);
+    P.base = cut;
+    if (!P.base.length) P.base = null;
+  }
+  P.bars = Math.max(1, P.bars - 1); P.cur = Math.min(k, P.bars - 1);
+  if (!P.takes.length && !P.base) pStatus(`Pattern ${k + 1} deleted. Nothing left: record pattern 1.`);
+  else pStatus(`Pattern ${k + 1} deleted${P.bars > 1 ? '; the ones after it moved up' : ''}. Tap + for a new pattern.`);
+  showPerf();
+  if (P.key) await buildPerformSong();
+};
 $('pClear').onclick = async () => { if (P.rec) return; stopClock(); P.takes = []; P.key = null; P.base = null; P.baseBpm = null; P.bars = 1; P.cur = 0; pStatus('Cleared; click stopped. Record a new take to start a new Perform song.'); showPerf(); };
 
 /** Turn the takes into a song: bar lines known, all bars marked, hits in fixed lanes; then the usual grid / mixer / export. */
@@ -1743,7 +1767,7 @@ $('status').onclick = () => $('status').classList.toggle('open');
 setInterval(() => { const n = S.patterns ? S.patterns.size : 0; const el = $('tabCount'); const v = n ? String(n) : ''; if (el.textContent !== v) el.textContent = v; }, 700);
 
 // ---------------------------------------------------------------- start
-const BUILD = '2026-11-28d';
+const BUILD = '2026-11-28e';
 log('Groove Lab loaded, build ' + BUILD + ', separator ' + SEPARATOR_VERSION);
 $('buildBtn').textContent = '⟳ ' + BUILD.slice(5);            // e.g. "⟳ 11-27e"
 $('buildBtn').title = `Build ${BUILD}: tap to check for a new version and reload`;

@@ -2,7 +2,7 @@
 // models/bmy_drums.onnx + models/bmy_drums.json. Front end = training/bmy_transcriber.features():
 // -1 dBFS peak, periodic Hann, 2048-point FFT, hop 441 (100 fps), centred + reflect padding, power,
 // 128 HTK mel bands 30 Hz - 16 kHz (Slaney norm), ln(power + 1e-7).
-import { fft } from './dsp.js?b=20261128d';
+import { fft } from './dsp.js?b=20261128e';
 
 const SR = 44100, N = 2048, HOP = 441, NM = 128, K = N / 2 + 1, FMIN = 30, FMAX = 16000;
 export const BMYT_FPS = SR / HOP;
